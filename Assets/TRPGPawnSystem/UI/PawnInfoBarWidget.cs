@@ -33,12 +33,18 @@ namespace Trpg.Pawns
         [SerializeField] private Text _nameText;
         [SerializeField] private Text _descriptionText;
         [SerializeField] private Text _movementText;
+        [SerializeField, Tooltip(
+            "비어 있으면 이동 수치 텍스트를 버튼으로 런타임 구성")]
+        private Button _moveButton;
         [SerializeField] private Button _closeButton;
         [SerializeField] private RectTransform _cursorBadge;
         [SerializeField] private Image _cursorBadgeImage;
         [SerializeField] private Text _cursorDistanceText;
         [SerializeField] private RectTransform _canvasRect;
         [SerializeField] private PawnBoardOverlayGraphic _boardOverlay;
+        [SerializeField, Tooltip(
+            "비어 있으면 정보 바 안에 굴림 UI를 런타임 생성")]
+        private PawnRollWidget _rollWidget;
 
         private GameObject _ownedBoardOverlayCanvas;
         private Vector2 _shownPosition;
@@ -47,9 +53,22 @@ namespace Trpg.Pawns
         private float _hideDuration;
         private Sequence _transition;
         private bool _isVisible;
+        private bool _isMovementModeActive;
+        private bool _hasMovementBudget;
         private int _movementScore;
+        private float _remainingMovementMeters;
+        private float _maximumMovementMeters;
+        private Image _moveButtonImage;
+        private bool _contentOffsetsCaptured;
+        private Vector2 _baseNameOffsetMax;
+        private Vector2 _baseDescriptionOffsetMax;
 
         public event Action CloseRequested;
+        public event Action MoveRequested;
+        public event Action RollInputOpened;
+        public event Action<PawnCheckRollRequest> CheckRollRequested;
+        public event Action<PawnEffectRollRequest> EffectRollRequested;
+        public event Action RollPresentationCompleted;
 
         public static PawnInfoBarWidget CreateRuntime(
             PawnSystemSettings settings)
@@ -63,6 +82,11 @@ namespace Trpg.Pawns
             _portraitImage.sprite = data.Portrait;
             _portraitImage.enabled = data.Portrait != null;
             _movementScore = data.MovementScore;
+            _hasMovementBudget = false;
+            EnsureMoveButton();
+            SetMovementModeState(true, false);
+            EnsureRollWidget();
+            _rollWidget?.SetButtonsEnabled(true);
             Show();
         }
         public void Unbind()
@@ -70,8 +94,66 @@ namespace Trpg.Pawns
             Hide();
             _nameText.text = string.Empty;
             _descriptionText.text = string.Empty;
+            _hasMovementBudget = false;
+            SetMovementModeState(false, false);
+            _rollWidget?.CancelPresentation();
+            _rollWidget?.SetButtonsEnabled(false);
             SetPathPreview(PawnPathPreviewData.Hidden);
             SetMovementRange(PawnMovementRangeData.Hidden);
+        }
+        public void SetRollButtonsEnabled(bool enabled)
+        {
+            EnsureRollWidget();
+            _rollWidget?.SetButtonsEnabled(enabled);
+        }
+        public void SetMovementModeState(bool enabled, bool active)
+        {
+            EnsureMoveButton();
+            _isMovementModeActive = enabled && active;
+            if (_moveButton != null)
+            {
+                _moveButton.interactable = enabled;
+            }
+
+            if (_moveButtonImage != null)
+            {
+                _moveButtonImage.color = _isMovementModeActive
+                    ? new Color(0.08f, 0.42f, 0.58f, 0.98f)
+                    : enabled
+                        ? new Color(0.08f, 0.20f, 0.25f, 0.96f)
+                        : new Color(0.07f, 0.08f, 0.09f, 0.72f);
+            }
+
+            RefreshMovementText();
+        }
+        public void SetRollButtonLabels(
+            string checkLabel,
+            string effectLabel)
+        {
+            EnsureRollWidget();
+            _rollWidget?.SetButtonLabels(checkLabel, effectLabel);
+        }
+        public void SetRollInputDefaults(
+            int checkTarget,
+            int diceCount,
+            int diceSides,
+            int modifier)
+        {
+            EnsureRollWidget();
+            _rollWidget?.SetInputDefaults(
+                checkTarget,
+                diceCount,
+                diceSides,
+                modifier);
+        }
+        public void PlayRoll(in PawnRollPresentationData data)
+        {
+            EnsureRollWidget();
+            _rollWidget?.Play(data);
+        }
+        public void CancelRollPresentation()
+        {
+            _rollWidget?.CancelPresentation();
         }
         public void SetMovementBudget(
             float remainingMeters,
@@ -82,9 +164,10 @@ namespace Trpg.Pawns
                 return;
             }
 
-            _movementText.text =
-                $"이동 {_movementScore}  " +
-                $"{remainingMeters:0.0}/{maximumMeters:0.0}m";
+            _remainingMovementMeters = remainingMeters;
+            _maximumMovementMeters = maximumMeters;
+            _hasMovementBudget = true;
+            RefreshMovementText();
         }
         public void SetMovementRange(
             PawnMovementRangeData data,
@@ -172,6 +255,7 @@ namespace Trpg.Pawns
             KillTransition();
             _isVisible = false;
             SetInteraction(false);
+            _rollWidget?.CancelPresentation();
             SetPathPreview(PawnPathPreviewData.Hidden);
             SetMovementRange(PawnMovementRangeData.Hidden);
             _transition = DOTween.Sequence()
@@ -224,7 +308,11 @@ namespace Trpg.Pawns
             _canvasGroup.alpha = 0f;
             SetInteraction(false);
             _boardOverlay?.ClearAll();
+            EnsureMoveButton();
+            BindMoveButton();
             BindCloseButton();
+            EnsureRollWidget();
+            BindRollWidget();
         }
 
         private void PositionCursorBadge(Vector2 screenPosition)
@@ -256,19 +344,36 @@ namespace Trpg.Pawns
         private void OnEnable()
         {
             EnsureBoardOverlay();
+            EnsureMoveButton();
+            BindMoveButton();
             BindCloseButton();
+            EnsureRollWidget();
+            BindRollWidget();
+            _rollWidget?.RefreshResponsiveLayout();
+            ApplyActionRowContentPadding();
+        }
+
+        private void OnRectTransformDimensionsChange()
+        {
+            _rollWidget?.RefreshResponsiveLayout();
+            ApplyActionRowContentPadding();
         }
 
         private void OnDisable()
         {
+            UnbindMoveButton();
             UnbindCloseButton();
+            UnbindRollWidget();
             KillTransition();
+            _rollWidget?.CancelPresentation();
             _boardOverlay?.ClearAll();
         }
 
         private void OnDestroy()
         {
+            UnbindMoveButton();
             UnbindCloseButton();
+            UnbindRollWidget();
             if (_ownedBoardOverlayCanvas != null)
             {
                 Destroy(_ownedBoardOverlayCanvas);
@@ -277,11 +382,110 @@ namespace Trpg.Pawns
             }
 
             CloseRequested = null;
+            MoveRequested = null;
+            RollInputOpened = null;
+            CheckRollRequested = null;
+            EffectRollRequested = null;
+            RollPresentationCompleted = null;
         }
 
         private void HandleCloseClicked()
         {
             CloseRequested?.Invoke();
+        }
+
+        private void HandleMoveClicked()
+        {
+            MoveRequested?.Invoke();
+        }
+
+        private void EnsureMoveButton()
+        {
+            if (_moveButton != null)
+            {
+                _moveButtonImage = _moveButton.targetGraphic as Image;
+                return;
+            }
+
+            if (_movementText == null)
+            {
+                return;
+            }
+
+            var textRect = _movementText.rectTransform;
+            var originalParent = textRect.parent;
+            var siblingIndex = textRect.GetSiblingIndex();
+            var anchorMin = textRect.anchorMin;
+            var anchorMax = textRect.anchorMax;
+            var pivot = textRect.pivot;
+            var anchoredPosition = textRect.anchoredPosition;
+            var sizeDelta = textRect.sizeDelta;
+
+            var buttonObject = new GameObject(
+                "MoveModeButton",
+                typeof(RectTransform),
+                typeof(CanvasRenderer),
+                typeof(Image),
+                typeof(Button));
+            var buttonRect =
+                buttonObject.GetComponent<RectTransform>();
+            buttonRect.SetParent(originalParent, false);
+            buttonRect.SetSiblingIndex(siblingIndex);
+            buttonRect.anchorMin = anchorMin;
+            buttonRect.anchorMax = anchorMax;
+            buttonRect.pivot = pivot;
+            buttonRect.anchoredPosition = anchoredPosition;
+            buttonRect.sizeDelta = sizeDelta;
+
+            _moveButtonImage = buttonObject.GetComponent<Image>();
+            _moveButtonImage.color =
+                new Color(0.08f, 0.20f, 0.25f, 0.96f);
+            _moveButton = buttonObject.GetComponent<Button>();
+            _moveButton.targetGraphic = _moveButtonImage;
+
+            textRect.SetParent(buttonRect, false);
+            textRect.anchorMin = Vector2.zero;
+            textRect.anchorMax = Vector2.one;
+            textRect.pivot = new Vector2(0.5f, 0.5f);
+            textRect.anchoredPosition = Vector2.zero;
+            textRect.sizeDelta = new Vector2(-12f, -4f);
+            _movementText.alignment = TextAnchor.MiddleCenter;
+        }
+
+        private void BindMoveButton()
+        {
+            if (_moveButton == null)
+            {
+                return;
+            }
+
+            _moveButton.onClick.RemoveListener(HandleMoveClicked);
+            _moveButton.onClick.AddListener(HandleMoveClicked);
+        }
+
+        private void UnbindMoveButton()
+        {
+            if (_moveButton != null)
+            {
+                _moveButton.onClick.RemoveListener(HandleMoveClicked);
+            }
+        }
+
+        private void RefreshMovementText()
+        {
+            if (_movementText == null)
+            {
+                return;
+            }
+
+            var modeLabel = _isMovementModeActive
+                ? "걷기 중"
+                : "걷기";
+            _movementText.text = _hasMovementBudget
+                ? $"{modeLabel} {_movementScore}\n" +
+                  $"{_remainingMovementMeters:0.0}/" +
+                  $"{_maximumMovementMeters:0.0}m"
+                : $"{modeLabel}\n{_movementScore}";
         }
 
         private void BindCloseButton()
@@ -301,6 +505,112 @@ namespace Trpg.Pawns
             {
                 _closeButton.onClick.RemoveListener(HandleCloseClicked);
             }
+        }
+
+        private void EnsureRollWidget()
+        {
+            if (_rollWidget != null || _panel == null)
+            {
+                _rollWidget?.ConfigureResponsiveLayout(
+                    _moveButton,
+                    _canvasRect,
+                    _panel);
+                ApplyActionRowContentPadding();
+                return;
+            }
+
+            _rollWidget = PawnRollWidget.CreateRuntime(
+                _panel,
+                _movementText != null ? _movementText.font : null);
+            _rollWidget.ConfigureResponsiveLayout(
+                _moveButton,
+                _canvasRect,
+                _panel);
+            ApplyActionRowContentPadding();
+        }
+
+        private void ApplyActionRowContentPadding()
+        {
+            if (_rollWidget == null ||
+                _nameText == null ||
+                _descriptionText == null)
+            {
+                return;
+            }
+
+            if (!_contentOffsetsCaptured)
+            {
+                _baseNameOffsetMax =
+                    _nameText.rectTransform.offsetMax;
+                _baseDescriptionOffsetMax =
+                    _descriptionText.rectTransform.offsetMax;
+                _contentOffsetsCaptured = true;
+            }
+
+            var reservedRight = Mathf.Max(
+                _rollWidget.ReservedRightWidth,
+                Mathf.Abs(_baseNameOffsetMax.x));
+            var nameOffset =
+                _baseNameOffsetMax;
+            nameOffset.x = -reservedRight;
+            _nameText.rectTransform.offsetMax = nameOffset;
+
+            var descriptionOffset =
+                _baseDescriptionOffsetMax;
+            descriptionOffset.x = -reservedRight;
+            _descriptionText.rectTransform.offsetMax =
+                descriptionOffset;
+        }
+
+        private void BindRollWidget()
+        {
+            if (_rollWidget == null)
+            {
+                return;
+            }
+
+            UnbindRollWidget();
+            _rollWidget.RollInputOpened += HandleRollInputOpened;
+            _rollWidget.CheckRollRequested += HandleCheckRollRequested;
+            _rollWidget.EffectRollRequested += HandleEffectRollRequested;
+            _rollWidget.PresentationCompleted +=
+                HandleRollPresentationCompleted;
+        }
+
+        private void UnbindRollWidget()
+        {
+            if (_rollWidget == null)
+            {
+                return;
+            }
+
+            _rollWidget.RollInputOpened -= HandleRollInputOpened;
+            _rollWidget.CheckRollRequested -= HandleCheckRollRequested;
+            _rollWidget.EffectRollRequested -= HandleEffectRollRequested;
+            _rollWidget.PresentationCompleted -=
+                HandleRollPresentationCompleted;
+        }
+
+        private void HandleRollInputOpened()
+        {
+            RollInputOpened?.Invoke();
+        }
+
+        private void HandleCheckRollRequested(
+            PawnCheckRollRequest request)
+        {
+            CheckRollRequested?.Invoke(request);
+        }
+
+        private void HandleEffectRollRequested(
+            PawnEffectRollRequest request)
+        {
+            EffectRollRequested?.Invoke(request);
+        }
+
+        private void HandleRollPresentationCompleted()
+        {
+            RollPresentationCompleted?.Invoke();
         }
 
         private void SetInteraction(bool enabled)

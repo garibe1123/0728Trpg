@@ -9,10 +9,10 @@ MonoBehaviour:
   m_GameObject: {fileID: 0}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 5b2e821d6f07e6b4885a056af14025e5, type: 3}
-  m_Name: InteractivePawnDefinition
+  m_Script: {fileID: 11500000, guid: b6732a1eea9cfbd43a6f5ec84e8915bc, type: 3}
+  m_Name: TestPlayer
   m_EditorClassIdentifier: 
-  _id: interactive_new
+  _id: Player01
   _kind: 0
   _moveableKind: 0
   _displayName: Player01
@@ -23,6 +23,6 @@ MonoBehaviour:
   _movementScore: 40
   _presentationMetersPerSecond: 6
   _presentationDurationSeconds: 0.75
-  _presentationHopHeight: 0.3
+  _presentationHopHeight: 0.2
   _presentationRotationDegrees: 7
   _selectedScale: 1.08
