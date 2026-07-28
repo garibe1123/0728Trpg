@@ -1,0 +1,33 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 30428ae936aa04345a8d6d9ba7191597, type: 3}
+  m_Name: PawnSystemSettings
+  m_EditorClassIdentifier: 
+  _id: pawn_system_default
+  _legacyDefaultMoveMeters: 0
+  _legacyDefaultMoveMetersPerTurn: 0
+  _defaultMovementScore: 40
+  _metersPerMovementPoint: 0.2
+  _gridCellMeters: 1.524
+  _snapDestinationToGrid: 1
+  _maxProjectionMeters: 0.3
+  _doorGuardSeconds: 0.2
+  _infoBarColor: {r: 0.055, g: 0.07, b: 0.09, a: 0.96}
+  _referenceResolution: {x: 1920, y: 1080}
+  _infoBarHeight: 150
+  _infoBarHorizontalMargin: 32
+  _infoBarBottomMargin: 24
+  _portraitSize: 110
+  _nameFontSize: 28
+  _descriptionFontSize: 20
+  _showDuration: 0.22
+  _hideDuration: 0.16

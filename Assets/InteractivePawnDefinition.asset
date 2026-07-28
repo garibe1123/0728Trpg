@@ -1,0 +1,28 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5b2e821d6f07e6b4885a056af14025e5, type: 3}
+  m_Name: InteractivePawnDefinition
+  m_EditorClassIdentifier: 
+  _id: interactive_new
+  _kind: 1
+  _moveableKind: 0
+  _displayName: 
+  _description: 
+  _portrait: {fileID: 0}
+  _legacyMoveMeters: 0
+  _legacyMoveMetersPerTurn: 0
+  _movementScore: 40
+  _presentationMetersPerSecond: 6
+  _presentationDurationSeconds: 0.5
+  _presentationHopHeight: 0.2
+  _presentationRotationDegrees: 7
+  _selectedScale: 1.08

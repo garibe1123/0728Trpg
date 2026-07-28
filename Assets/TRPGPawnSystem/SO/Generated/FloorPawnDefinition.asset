@@ -1,0 +1,19 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 0a0032ba8c1156e45865d810a1dbe221, type: 3}
+  m_Name: FloorPawnDefinition
+  m_EditorClassIdentifier: 
+  _id: field_floor_0ece005cc7bc4e778ec5e0d26f3d010d_definition
+  _kind: 0
+  _isDestinationEnabled: 1
+  _reachableColor: {r: 0.2, g: 0.7, b: 1, a: 0.28}
+  _overlayFadeSeconds: 0.12
