@@ -84,7 +84,7 @@ namespace Trpg.Pawns
             _movementScore = data.MovementScore;
             _hasMovementBudget = false;
             EnsureMoveButton();
-            SetMovementModeState(true, false);
+            SetMovementModeState(false, false);
             EnsureRollWidget();
             _rollWidget?.SetButtonsEnabled(true);
             Show();
@@ -307,7 +307,7 @@ namespace Trpg.Pawns
             _panel.anchoredPosition = _hiddenPosition;
             _canvasGroup.alpha = 0f;
             SetInteraction(false);
-            _boardOverlay?.ClearAll();
+            ClearBoardOverlay();
             EnsureMoveButton();
             BindMoveButton();
             BindCloseButton();
@@ -366,7 +366,7 @@ namespace Trpg.Pawns
             UnbindRollWidget();
             KillTransition();
             _rollWidget?.CancelPresentation();
-            _boardOverlay?.ClearAll();
+            ClearBoardOverlay();
         }
 
         private void OnDestroy()
@@ -623,6 +623,18 @@ namespace Trpg.Pawns
         {
             _transition?.Kill();
             _transition = null;
+        }
+
+        private void ClearBoardOverlay()
+        {
+            if (_boardOverlay != null)
+            {
+                _boardOverlay.ClearAll();
+                return;
+            }
+
+            // Unity에서 파괴된 Object 참조가 C# 필드에 남아 있을 수 있다.
+            _boardOverlay = null;
         }
 
         private void EnsureBoardOverlay()

@@ -1,4 +1,5 @@
 using System;
+using Trpg.UI.Stats;
 using UnityEngine;
 
 namespace Trpg.Pawns
@@ -29,28 +30,6 @@ namespace Trpg.Pawns
         [SerializeField, Tooltip("효과 굴림 최종 합계에 더할 보정치")]
         private int _effectDiceModifier;
 
-        [Header("Roll Animation")]
-        [SerializeField, Min(0.25f), Tooltip(
-            "판정 굴림 룰렛이 회전하는 총 시간(초)")]
-        private float _checkRollDuration = 2.35f;
-
-        [SerializeField, Min(0.25f), Tooltip(
-            "효과 굴림 룰렛이 회전하는 총 시간(초)")]
-        private float _effectRollDuration = 2.15f;
-
-        [SerializeField, Range(0.25f, 20f), Tooltip(
-            "결과에 도달하기 전 룰렛이 도는 바퀴 수")]
-        private float _rollRotations = 7f;
-
-        [SerializeField, Range(1f, 10f), Tooltip(
-            "1이면 일정 속도에 가깝고, 값이 클수록 초반은 빠르며 " +
-            "마지막 감속이 오래 늘어짐")]
-        private float _rollDeceleration = 4f;
-
-        [SerializeField, Min(0f), Tooltip(
-            "룰렛이 멈춘 뒤 결과를 유지하는 시간(초)")]
-        private float _rollResultHoldDuration = 0.22f;
-
         [Header("Roll Result Colors")]
         [SerializeField] private Color _criticalColor =
             new Color(0.20f, 0.95f, 0.38f);
@@ -58,14 +37,12 @@ namespace Trpg.Pawns
             new Color(0.24f, 0.84f, 1f);
         [SerializeField] private Color _failureColor =
             new Color(1f, 0.36f, 0.28f);
-        [SerializeField] private Color _fumbleColor =
-            new Color(1f, 0.16f, 0.38f);
+        [SerializeField] private Color _fumbleColor = Color.black;
         [SerializeField] private Color _effectColor =
             new Color(1f, 0.78f, 0.22f);
 
         private PawnRollService _rollService;
         private bool _isRollInProgress;
-        private bool _isMovementModeActive;
 
         private void Awake()
         {
@@ -105,7 +82,6 @@ namespace Trpg.Pawns
                 HandleMovementRangeChanged;
             _infoBar.CloseRequested += HandleCloseRequested;
             _infoBar.MoveRequested += HandleMoveRequested;
-            _infoBar.RollInputOpened += HandleRollInputOpened;
             _infoBar.CheckRollRequested += HandleCheckRollRequested;
             _infoBar.EffectRollRequested += HandleEffectRollRequested;
             _infoBar.RollPresentationCompleted +=
@@ -132,7 +108,6 @@ namespace Trpg.Pawns
             {
                 _infoBar.CloseRequested -= HandleCloseRequested;
                 _infoBar.MoveRequested -= HandleMoveRequested;
-                _infoBar.RollInputOpened -= HandleRollInputOpened;
                 _infoBar.CheckRollRequested -= HandleCheckRollRequested;
                 _infoBar.EffectRollRequested -= HandleEffectRollRequested;
                 _infoBar.RollPresentationCompleted -=
@@ -140,9 +115,8 @@ namespace Trpg.Pawns
                 _infoBar.Hide();
             }
 
-            _isMovementModeActive = false;
-            _pawnManager?.SetMovementMode(false);
             _isRollInProgress = false;
+            PlayerStatState.SetActive(null);
         }
 
         private void HandleCloseRequested()
@@ -155,13 +129,14 @@ namespace Trpg.Pawns
         {
             if (pawn == null || pawn.Definition == null)
             {
-                _isMovementModeActive = false;
+                PlayerStatState.SetActive(null);
                 _infoBar.Unbind();
                 RefreshRollButtons(null);
                 return;
             }
 
-            _isMovementModeActive = false;
+            PlayerStatState.SetActiveFrom(pawn.gameObject);
+
             var definition = pawn.Definition;
             var displayName =
                 string.IsNullOrWhiteSpace(definition.DisplayName)
@@ -174,8 +149,22 @@ namespace Trpg.Pawns
                 definition.MovementScore);
             _infoBar.Bind(data);
             RefreshMovementBudget(pawn);
-            _infoBar.SetMovementModeState(pawn.IsMoveable, false);
+            RefreshMovementModeState(pawn);
             RefreshRollButtons(pawn);
+        }
+
+        private void HandleMoveRequested()
+        {
+            if (_pawnManager == null)
+            {
+                return;
+            }
+
+            var requestedActive =
+                !_pawnManager.IsMovementModeActive;
+            _pawnManager.SetMovementMode(requestedActive);
+            RefreshMovementModeState(
+                _pawnManager.SelectedInteractive);
         }
 
         public void SetCheckStatId(string statId)
@@ -218,20 +207,12 @@ namespace Trpg.Pawns
 
         private void HandlePathPreviewChanged(PawnPathPreviewData data)
         {
-            _infoBar.SetPathPreview(
-                _isMovementModeActive
-                    ? data
-                    : PawnPathPreviewData.Hidden,
-                _pawnManager.BoardCamera);
+            _infoBar.SetPathPreview(data, _pawnManager.BoardCamera);
         }
 
         private void HandleMovementRangeChanged(PawnMovementRangeData data)
         {
-            _infoBar.SetMovementRange(
-                _isMovementModeActive
-                    ? data
-                    : PawnMovementRangeData.Hidden,
-                _pawnManager.BoardCamera);
+            _infoBar.SetMovementRange(data, _pawnManager.BoardCamera);
         }
 
         private void RefreshMovementBudget(InteractivePawn pawn)
@@ -245,52 +226,22 @@ namespace Trpg.Pawns
             }
         }
 
-        private void HandleMoveRequested()
+        private void RefreshMovementModeState(InteractivePawn pawn)
         {
-            if (_isRollInProgress)
-            {
-                return;
-            }
-
-            var pawn = _pawnManager.SelectedInteractive;
-            if (pawn == null || !pawn.IsMoveable)
-            {
-                ExitMovementMode();
-                return;
-            }
-
-            var requestedState = !_isMovementModeActive;
-            _infoBar.CancelRollPresentation();
-            _isMovementModeActive = requestedState;
-            _isMovementModeActive =
-                _pawnManager.SetMovementMode(requestedState);
+            var canMove = pawn != null && pawn.IsMoveable;
             _infoBar.SetMovementModeState(
-                true,
-                _isMovementModeActive);
+                canMove,
+                canMove && _pawnManager.IsMovementModeActive);
         }
 
-        private void HandleRollInputOpened()
-        {
-            if (_isRollInProgress)
-            {
-                return;
-            }
-
-            ExitMovementMode();
-        }
-
-        private void HandleCheckRollRequested(
-            PawnCheckRollRequest request)
+        private void HandleCheckRollRequested(PawnCheckRollRequest request)
         {
             if (!TryBeginRoll(out var pawn))
             {
                 return;
             }
 
-            var target = Mathf.Clamp(
-                request.Target,
-                MinimumCheckTarget,
-                MaximumCheckTarget);
+            var target = ResolveCheckTarget(pawn);
             var result = _rollService.RollD100(target);
             var presentation = new PawnRollPresentationData(
                 "판정 굴림",
@@ -301,31 +252,17 @@ namespace Trpg.Pawns
                 GetCheckResultLabel(result.Grade),
                 $"굴림 {result.Roll} / 목표 {target}",
                 GetCheckResultColor(result.Grade),
-                _checkRollDuration,
-                checkTarget: target,
-                pointerRotations: _rollRotations,
-                decelerationExponent: _rollDeceleration,
-                resultHoldSeconds: _rollResultHoldDuration);
+                1.55f);
             _infoBar.PlayRoll(presentation);
         }
 
-        private void HandleEffectRollRequested(
-            PawnEffectRollRequest request)
+        private void HandleEffectRollRequested(PawnEffectRollRequest request)
         {
             if (!TryBeginRoll(out _))
             {
                 return;
             }
 
-            _effectDiceCount = Mathf.Clamp(
-                request.DiceCount,
-                1,
-                PawnRollService.MaximumDiceCount);
-            _effectDiceSides = Mathf.Clamp(
-                request.DiceSides,
-                2,
-                PawnRollService.MaximumDiceSides);
-            _effectDiceModifier = request.Modifier;
             var result = _rollService.RollEffect(
                 _effectDiceCount,
                 _effectDiceSides,
@@ -339,22 +276,16 @@ namespace Trpg.Pawns
                 $"합계 {result.Total}",
                 result.GetBreakdownLabel(),
                 _effectColor,
-                _effectRollDuration,
-                pointerRotations: _rollRotations,
-                decelerationExponent: _rollDeceleration,
-                resultHoldSeconds: _rollResultHoldDuration);
+                1.35f);
             _infoBar.PlayRoll(presentation);
         }
 
         private void HandleRollPresentationCompleted()
         {
             _isRollInProgress = false;
-            var pawn = _pawnManager.SelectedInteractive;
-            var hasPawn = pawn != null && pawn.Definition != null;
-            _infoBar.SetRollButtonsEnabled(hasPawn);
-            _infoBar.SetMovementModeState(
-                hasPawn && pawn.IsMoveable,
-                false);
+            _infoBar.SetRollButtonsEnabled(
+                _pawnManager.SelectedInteractive != null &&
+                _pawnManager.SelectedInteractive.Definition != null);
         }
 
         private bool TryBeginRoll(out InteractivePawn pawn)
@@ -367,21 +298,9 @@ namespace Trpg.Pawns
                 return false;
             }
 
-            ExitMovementMode();
             _isRollInProgress = true;
             _infoBar.SetRollButtonsEnabled(false);
-            _infoBar.SetMovementModeState(false, false);
             return true;
-        }
-
-        private void ExitMovementMode()
-        {
-            _isMovementModeActive = false;
-            _pawnManager.SetMovementMode(false);
-            var pawn = _pawnManager.SelectedInteractive;
-            _infoBar.SetMovementModeState(
-                pawn != null && pawn.IsMoveable,
-                false);
         }
 
         private int ResolveCheckTarget(InteractivePawn pawn)
@@ -416,14 +335,13 @@ namespace Trpg.Pawns
                 ResolveCheckTarget(pawn),
                 MinimumCheckTarget,
                 MaximumCheckTarget);
-            _infoBar.SetRollInputDefaults(
-                target,
+            var effectExpression = PawnRollService.FormatExpression(
                 _effectDiceCount,
                 _effectDiceSides,
                 _effectDiceModifier);
             _infoBar.SetRollButtonLabels(
-                "판정 굴림\nD100",
-                "효과 굴림\nNdN");
+                $"판정 굴림\nD100 ≤ {target}",
+                $"효과 굴림\n{effectExpression}");
         }
 
         private Color GetCheckResultColor(CheckRollGrade grade)
@@ -433,12 +351,7 @@ namespace Trpg.Pawns
                 case CheckRollGrade.Critical:
                     return _criticalColor;
                 case CheckRollGrade.Fumble:
-                    return Mathf.Max(
-                        _fumbleColor.r,
-                        _fumbleColor.g,
-                        _fumbleColor.b) < 0.18f
-                        ? new Color(1f, 0.16f, 0.38f)
-                        : _fumbleColor;
+                    return _fumbleColor;
                 case CheckRollGrade.ExtremeSuccess:
                 case CheckRollGrade.HardSuccess:
                 case CheckRollGrade.Success:
@@ -478,23 +391,6 @@ namespace Trpg.Pawns
                 _effectDiceSides,
                 2,
                 PawnRollService.MaximumDiceSides);
-            _checkRollDuration = Mathf.Max(
-                0.25f,
-                _checkRollDuration);
-            _effectRollDuration = Mathf.Max(
-                0.25f,
-                _effectRollDuration);
-            _rollRotations = Mathf.Clamp(
-                _rollRotations,
-                0.25f,
-                20f);
-            _rollDeceleration = Mathf.Clamp(
-                _rollDeceleration,
-                1f,
-                10f);
-            _rollResultHoldDuration = Mathf.Max(
-                0f,
-                _rollResultHoldDuration);
             if (string.IsNullOrWhiteSpace(_checkStatId))
             {
                 _checkStatId = PawnRollStats.DefaultStatId;

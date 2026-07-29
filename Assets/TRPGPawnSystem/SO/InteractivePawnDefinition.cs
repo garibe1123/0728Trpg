@@ -1,3 +1,4 @@
+using Trpg.Data.Stats;
 using UnityEngine;
 using UnityEngine.Serialization;
 
@@ -37,8 +38,18 @@ namespace Trpg.Pawns
         private int _legacyMoveMetersPerTurn;
 
         [SerializeField, Range(10, 100), Tooltip(
-            "이동 능력치. 실제 턴당 거리는 PawnSystemSettings의 환산값을 사용")]
+            "Player 스탯을 사용하지 못할 때 쓰는 이동 능력치입니다.")]
         private int _movementScore = 40;
+
+        [Header("Player Stats")]
+        [SerializeField, Tooltip(
+            "Player Pawn이 사용할 캐릭터별 기본 스탯 SO입니다. NPC와 Monster에서는 사용하지 않습니다.")]
+        private CharacterStatDefinition _playerStats;
+
+        [SerializeField, Min(0.01f), Tooltip(
+            "룰 템플릿의 Movement 값을 기존 MovementScore로 환산하는 배율입니다. " +
+            "예: CoC MOV 8을 MovementScore 40으로 쓰려면 5를 지정합니다.")]
+        private float _movementStatToScoreMultiplier = 5f;
 
         [SerializeField, HideInInspector]
         private float _presentationMetersPerSecond = 6f;
@@ -66,6 +77,13 @@ namespace Trpg.Pawns
         public string DisplayName => _displayName;
         public string Description => _description;
         public Sprite Portrait => _portrait;
+        public bool IsPlayer =>
+            _kind == InteractivePawnKind.Moveable &&
+            _moveableKind == MoveablePawnKind.Player;
+        public CharacterStatDefinition PlayerStats =>
+            IsPlayer ? _playerStats : null;
+        public float MovementStatToScoreMultiplier =>
+            Mathf.Max(0.01f, _movementStatToScoreMultiplier);
         public int MovementScore
         {
             get
@@ -118,6 +136,13 @@ namespace Trpg.Pawns
             if (string.IsNullOrWhiteSpace(_id))
             {
                 Debug.LogError($"[{name}] Definition Id가 비어 있습니다.", this);
+            }
+
+            if (IsPlayer && _playerStats == null)
+            {
+                Debug.LogError(
+                    $"[{name}] Player Pawn에는 Character Stat Definition이 필요합니다.",
+                    this);
             }
         }
 #endif

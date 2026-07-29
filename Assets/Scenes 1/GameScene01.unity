@@ -1333,16 +1333,46 @@ MonoBehaviour:
   _defaultMaterial: {fileID: 2100000, guid: a97c105638bdf8b4a8650670310a4cd3, type: 2}
   _activeMaterial: {fileID: 2100000, guid: 0541375d74ba1e345a8b7d5d9b240ff7, type: 2}
   _movementManager: {fileID: 93580602}
-  _playerPawns:
-  - {fileID: 363143312}
+  _playerPawns: []
   _monsterPawns: []
   _npcPawns: []
-  _nextTurnButton: {fileID: 0}
+  _nextTurnButton: {fileID: 185402859}
   _createTurnButtonAtRuntime: 1
   _turnUiReferenceResolution: {x: 1920, y: 1080}
   _turnButtonOffset: {x: 24, y: -24}
   _turnButtonSize: {x: 180, y: 64}
   _turnButtonColor: {r: 0.075, g: 0.16, b: 0.22, a: 0.96}
+  _playerInteractionBarWidget: {fileID: 0}
+  _createPlayerInteractionBarAtRuntime: 1
+  _playerInteractionBarStyle:
+    _referenceResolution: {x: 1920, y: 1080}
+    _rightTopOffset: {x: -24, y: -140}
+    _barWidth: 320
+    _slotHeight: 72
+    _slotSpacing: 8
+    _panelPadding: 12
+    _titleHeight: 34
+    _innerPadding: 12
+    _portraitSize: 52
+    _titleFontSize: 18
+    _nameFontSize: 22
+    _orderFontSize: 14
+    _hoverOffset: 22
+    _selectedOffset: 8
+    _motionDuration: 0.16
+    _fillDuration: 0.24
+    _sortingOrder: 5050
+    _panelColor: {r: 0.035, g: 0.045, b: 0.065, a: 0.9}
+    _slotColor: {r: 0.075, g: 0.095, b: 0.13, a: 0.96}
+    _hoverColor: {r: 0.11, g: 0.15, b: 0.2, a: 1}
+    _interactionColor: {r: 0.1, g: 0.54, b: 0.75, a: 0.72}
+    _interactionAccentColor: {r: 0.32, g: 0.84, b: 1, a: 1}
+    _textColor: {r: 1, g: 1, b: 1, a: 1}
+    _mutedTextColor: {r: 0.68, g: 0.76, b: 0.84, a: 1}
+  _cameraStartDelay: 0.08
+  _cameraFocusDuration: 0.42
+  _cameraFocusOffset: {x: 0, y: 0}
+  _cameraFocusEase: 9
 --- !u!4 &1679236806
 Transform:
   m_ObjectHideFlags: 0
