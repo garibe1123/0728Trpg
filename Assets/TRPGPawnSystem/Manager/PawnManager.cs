@@ -43,6 +43,32 @@ namespace Trpg.Pawns
         [SerializeField]
         private PawnMovementManager _movementManager;
 
+        [Header("Active Pawn Camera Follow")]
+        [SerializeField, Tooltip(
+            "활성 Pawn의 이동 연출 동안 Board Camera가 Pawn을 따라갑니다.")]
+        private bool _followActivePawnDuringMovement = true;
+
+        [SerializeField, Min(0.01f), Tooltip(
+            "카메라가 활성 Pawn을 따라가는 데 걸리는 완화 시간")]
+        private float _cameraFollowSmoothTime = 0.12f;
+
+        [Header("Player HUD Camera Focus")]
+        [SerializeField, Min(0f), Tooltip(
+            "우측 플레이어 프로필 클릭 후 카메라 이동 시작 지연")]
+        private float _cameraFocusStartDelay = 0.08f;
+
+        [SerializeField, Min(0.01f), Tooltip(
+            "우측 플레이어 프로필 클릭 시 카메라 이동 시간")]
+        private float _cameraFocusDuration = 0.42f;
+
+        [SerializeField, Tooltip(
+            "플레이어 Pawn 중심에서 카메라가 바라볼 추가 월드 좌표")]
+        private Vector2 _cameraFocusOffset;
+
+        [SerializeField, Tooltip(
+            "우측 플레이어 프로필 클릭 시 카메라 이동 Ease")]
+        private Ease _cameraFocusEase = Ease.OutCubic;
+
         [Header("Pawn Groups - Auto Collected")]
         [SerializeField, Tooltip(
             "MoveablePawnKind.Player로 자동 분류된 Pawn")]
@@ -85,35 +111,6 @@ namespace Trpg.Pawns
         private Color _turnButtonColor =
             new Color(0.075f, 0.16f, 0.22f, 0.96f);
 
-        [Header("Player Interaction Bar")]
-        [SerializeField, Tooltip(
-            "직접 만든 우측 Player 바. 비어 있으면 런타임에 자동 생성")]
-        private PlayerInteractionBarWidget _playerInteractionBarWidget;
-
-        [SerializeField, Tooltip(
-            "Player Interaction Bar Widget이 비어 있을 때 런타임 생성")]
-        private bool _createPlayerInteractionBarAtRuntime = true;
-
-        [SerializeField]
-        private PlayerInteractionBarStyle _playerInteractionBarStyle =
-            PlayerInteractionBarStyle.Default;
-
-        [Header("Player Camera Focus")]
-        [SerializeField, Min(0f), Tooltip(
-            "Player 선택 뒤 카메라 이동을 시작할 지연 시간")]
-        private float _cameraStartDelay = 0.08f;
-
-        [SerializeField, Min(0.01f), Tooltip(
-            "선택한 Player 중심까지 카메라가 이동하는 시간")]
-        private float _cameraFocusDuration = 0.42f;
-
-        [SerializeField, Tooltip(
-            "Player 중심에서 카메라를 추가로 옮길 월드 좌표 오프셋")]
-        private Vector2 _cameraFocusOffset;
-
-        [SerializeField, Tooltip("Player 카메라 포커스 이동 Ease")]
-        private Ease _cameraFocusEase = Ease.OutCubic;
-
         private readonly List<Pawn> _pawns = new List<Pawn>();
         private readonly List<InteractivePawn> _interactivePawns =
             new List<InteractivePawn>();
@@ -122,9 +119,6 @@ namespace Trpg.Pawns
                 new Dictionary<InteractivePawn, SpriteRenderer[]>();
         private readonly List<RaycastResult> _uiRaycastResults =
             new List<RaycastResult>();
-        private readonly List<PlayerInteractionSlotData>
-            _playerInteractionSlotData =
-                new List<PlayerInteractionSlotData>();
 
         private InputAction _selectAction;
         private InputAction _moveAction;
@@ -133,25 +127,22 @@ namespace Trpg.Pawns
         private PointerEventData _uiPointerEventData;
         private EventSystem _cachedEventSystem;
         private GameObject _ownedTurnCanvas;
-        private GameObject _ownedPlayerInteractionBarCanvas;
         private Image _nextTurnButtonImage;
         private Text _nextTurnButtonLabel;
-        private Sequence _cameraFocusTween;
-        private InteractivePawn _interactionPlayer;
         private TurnGroup _currentTurnGroup;
         private bool _hasCurrentTurnGroup;
         private bool _isMovementModeActive;
+        private InteractivePawn _cameraFollowPawn;
+        private Vector3 _cameraFollowVelocity;
+        private Sequence _cameraFocusTween;
 
         public event Action<InteractivePawn> InteractiveSelectionChanged;
-        public event Action<InteractivePawn> InteractionPlayerChanged;
         public event Action<InteractivePawn> InteractionRequested;
         public event Action<TurnGroup, IReadOnlyList<InteractivePawn>>
             TurnGroupChanged;
 
         public InteractivePawn SelectedInteractive =>
             _selectedInteractive;
-        public InteractivePawn InteractionPlayer =>
-            _interactionPlayer;
         public bool IsMovementModeActive => _isMovementModeActive;
         public PawnMovementManager MovementManager => _movementManager;
         public Camera BoardCamera => _boardCamera;
@@ -170,6 +161,8 @@ namespace Trpg.Pawns
         public void ClearSelection()
         {
             SetMovementMode(false);
+            KillCameraFocusTween();
+            _cameraFollowPawn = null;
             if (_selectedInteractive == null)
             {
                 return;
@@ -181,7 +174,6 @@ namespace Trpg.Pawns
                 false);
             _selectedInteractive = null;
             InteractiveSelectionChanged?.Invoke(null);
-            ApplyInteractionPlayer(null, true, false);
         }
 
         public bool SetMovementMode(bool enabled)
@@ -255,6 +247,7 @@ namespace Trpg.Pawns
             }
 
             ClearSelection();
+            UnbindCameraFollowEvents();
             _movementManager.Unbind();
 
             for (var index = 0; index < _pawns.Count; index++)
@@ -277,9 +270,9 @@ namespace Trpg.Pawns
 
             ApplyDefaultPresentations();
             _movementManager.Bind(_interactivePawns);
+            BindCameraFollowEvents();
             InitializeCurrentTurnGroup();
             RefreshTurnButtonState();
-            RefreshPlayerInteractionBar();
             PublishTurnGroupChanged();
         }
 
@@ -311,7 +304,6 @@ namespace Trpg.Pawns
             InitializeCurrentTurnGroup();
             ValidateSelectionMaterials();
             EnsureTurnButton();
-            EnsurePlayerInteractionBar();
 
             _selectAction = new InputAction(
                 "PawnSelect",
@@ -350,12 +342,12 @@ namespace Trpg.Pawns
                 _activeMaterial,
                 true);
             _movementManager.Bind(_interactivePawns);
+            BindCameraFollowEvents();
             _isMovementModeActive = false;
             _movementManager.ClearMover();
 
             BindTurnButton();
             RefreshTurnButtonState();
-            BindPlayerInteractionBar();
 
             _selectAction.performed += HandleSelectPerformed;
             _moveAction.performed += HandleMovePerformed;
@@ -370,9 +362,8 @@ namespace Trpg.Pawns
         private void OnDisable()
         {
             SetMovementMode(false);
-            UnbindTurnButton();
-            UnbindPlayerInteractionBar();
             KillCameraFocusTween();
+            UnbindTurnButton();
 
             if (_selectAction != null)
             {
@@ -397,6 +388,7 @@ namespace Trpg.Pawns
                 _defaultMaterial,
                 false);
 
+            UnbindCameraFollowEvents();
             if (_movementManager != null)
             {
                 _movementManager.Unbind();
@@ -413,6 +405,7 @@ namespace Trpg.Pawns
 
         private void OnDestroy()
         {
+            KillCameraFocusTween();
             _selectAction?.Dispose();
             _moveAction?.Dispose();
             _pointAction?.Dispose();
@@ -423,16 +416,23 @@ namespace Trpg.Pawns
                 _ownedTurnCanvas = null;
             }
 
-            if (_ownedPlayerInteractionBarCanvas != null)
-            {
-                Destroy(_ownedPlayerInteractionBarCanvas);
-                _ownedPlayerInteractionBarCanvas = null;
-            }
-
             InteractiveSelectionChanged = null;
-            InteractionPlayerChanged = null;
             InteractionRequested = null;
             TurnGroupChanged = null;
+        }
+
+        private void LateUpdate()
+        {
+            if (!_followActivePawnDuringMovement ||
+                _cameraFollowPawn == null ||
+                _boardCamera == null)
+            {
+                return;
+            }
+
+            MoveCameraTo(
+                _cameraFollowPawn.PresentationWorldPosition,
+                false);
         }
 
         private void HandleSelectPerformed(
@@ -479,6 +479,130 @@ namespace Trpg.Pawns
         private void HandleNextTurnClicked()
         {
             AdvanceTurn();
+        }
+
+        private void HandlePawnMoved(
+            InteractivePawn pawn,
+            Vector2 destination)
+        {
+            if (!_followActivePawnDuringMovement ||
+                pawn == null ||
+                pawn != _selectedInteractive)
+            {
+                return;
+            }
+
+            _cameraFollowVelocity = Vector3.zero;
+            _cameraFollowPawn = pawn;
+        }
+
+        private void HandleDoorTransferred(
+            InteractivePawn pawn,
+            Vector2 destination)
+        {
+            if (!_followActivePawnDuringMovement ||
+                pawn == null ||
+                pawn != _selectedInteractive)
+            {
+                return;
+            }
+
+            _cameraFollowVelocity = Vector3.zero;
+            MoveCameraTo(pawn.PresentationWorldPosition, true);
+            _cameraFollowPawn = null;
+        }
+
+        private void HandlePawnMovementPresentationCompleted(
+            InteractivePawn pawn)
+        {
+            if (pawn == null || pawn != _cameraFollowPawn)
+            {
+                return;
+            }
+
+            MoveCameraTo(pawn.PresentationWorldPosition, true);
+            _cameraFollowVelocity = Vector3.zero;
+            _cameraFollowPawn = null;
+        }
+
+        private void BindCameraFollowEvents()
+        {
+            UnbindCameraFollowEvents();
+            if (_movementManager == null)
+            {
+                return;
+            }
+
+            _movementManager.PawnMoved += HandlePawnMoved;
+            _movementManager.DoorTransferred +=
+                HandleDoorTransferred;
+
+            for (var index = 0;
+                 index < _interactivePawns.Count;
+                 index++)
+            {
+                var pawn = _interactivePawns[index];
+                if (pawn == null)
+                {
+                    continue;
+                }
+
+                pawn.MovementPresentationCompleted -=
+                    HandlePawnMovementPresentationCompleted;
+                pawn.MovementPresentationCompleted +=
+                    HandlePawnMovementPresentationCompleted;
+            }
+        }
+
+        private void UnbindCameraFollowEvents()
+        {
+            if (_movementManager != null)
+            {
+                _movementManager.PawnMoved -= HandlePawnMoved;
+                _movementManager.DoorTransferred -=
+                    HandleDoorTransferred;
+            }
+
+            for (var index = 0;
+                 index < _interactivePawns.Count;
+                 index++)
+            {
+                var pawn = _interactivePawns[index];
+                if (pawn != null)
+                {
+                    pawn.MovementPresentationCompleted -=
+                        HandlePawnMovementPresentationCompleted;
+                }
+            }
+
+            _cameraFollowPawn = null;
+            _cameraFollowVelocity = Vector3.zero;
+        }
+
+        private void MoveCameraTo(
+            Vector3 pawnPosition,
+            bool immediately)
+        {
+            if (_boardCamera == null)
+            {
+                return;
+            }
+
+            var cameraTransform = _boardCamera.transform;
+            var destination = new Vector3(
+                pawnPosition.x,
+                pawnPosition.y,
+                cameraTransform.position.z);
+
+            cameraTransform.position = immediately
+                ? destination
+                : Vector3.SmoothDamp(
+                    cameraTransform.position,
+                    destination,
+                    ref _cameraFollowVelocity,
+                    Mathf.Max(
+                        0.01f,
+                        _cameraFollowSmoothTime));
         }
 
         private InteractivePawn ResolveInteractiveTarget(
@@ -606,12 +730,66 @@ namespace Trpg.Pawns
                 _activeMaterial,
                 true);
             InteractiveSelectionChanged?.Invoke(_selectedInteractive);
-            ApplyInteractionPlayer(_selectedInteractive, true, true);
 
             if (!pawn.IsMoveable)
             {
                 InteractionRequested?.Invoke(pawn);
             }
+        }
+
+        public void SelectAndFocusInteractive(InteractivePawn pawn)
+        {
+            if (pawn == null)
+                return;
+
+            SelectInteractive(pawn);
+            if (_selectedInteractive != pawn)
+                return;
+
+            FocusCameraOnce(pawn);
+        }
+
+        private void FocusCameraOnce(InteractivePawn pawn)
+        {
+            if (_boardCamera == null || pawn == null)
+                return;
+
+            _cameraFollowPawn = null;
+            _cameraFollowVelocity = Vector3.zero;
+
+            var snapshot =
+                pawn.PresentationWorldPosition +
+                (Vector3)_cameraFocusOffset;
+            var cameraTransform = _boardCamera.transform;
+            var target = new Vector3(
+                snapshot.x,
+                snapshot.y,
+                cameraTransform.position.z);
+
+            KillCameraFocusTween();
+            var sequence = DOTween.Sequence();
+            _cameraFocusTween = sequence;
+            sequence.SetUpdate(true);
+            if (_cameraFocusStartDelay > 0f)
+                sequence.AppendInterval(_cameraFocusStartDelay);
+
+            sequence.Append(
+                cameraTransform
+                    .DOMove(
+                        target,
+                        Mathf.Max(0.01f, _cameraFocusDuration))
+                    .SetEase(_cameraFocusEase));
+            sequence.OnComplete(() =>
+            {
+                if (_cameraFocusTween == sequence)
+                    _cameraFocusTween = null;
+            });
+        }
+
+        private void KillCameraFocusTween()
+        {
+            _cameraFocusTween?.Kill();
+            _cameraFocusTween = null;
         }
 
         private void RefreshPointerPreview()
@@ -886,219 +1064,6 @@ namespace Trpg.Pawns
                     _currentTurnGroup,
                     GetTurnGroupPawns(_currentTurnGroup));
             }
-        }
-
-        [ContextMenu("Refresh Player Interaction Bar")]
-        public void RefreshPlayerInteractionBar()
-        {
-            if (!Application.isPlaying ||
-                _playerInteractionBarWidget == null)
-            {
-                return;
-            }
-
-            RebindPlayerInteractionBar();
-            ApplyInteractionPlayer(
-                _selectedInteractive,
-                false,
-                false);
-        }
-
-        private void EnsurePlayerInteractionBar()
-        {
-            if (_playerInteractionBarWidget != null)
-            {
-                return;
-            }
-
-            if (!_createPlayerInteractionBarAtRuntime)
-            {
-                Debug.LogWarning(
-                    $"[{name}] Player Interaction Bar Widget이 " +
-                    "비어 있어 우측 Player 바를 생성하지 않습니다.",
-                    this);
-                return;
-            }
-
-            _playerInteractionBarWidget =
-                PlayerInteractionBarWidget.CreateRuntime(
-                    _playerInteractionBarStyle,
-                    out _ownedPlayerInteractionBarCanvas);
-        }
-
-        private void BindPlayerInteractionBar()
-        {
-            EnsurePlayerInteractionBar();
-            if (_playerInteractionBarWidget == null)
-            {
-                return;
-            }
-
-            RebindPlayerInteractionBar();
-            _playerInteractionBarWidget.PlayerClicked -=
-                HandleInteractionBarPlayerClicked;
-            _playerInteractionBarWidget.PlayerClicked +=
-                HandleInteractionBarPlayerClicked;
-            ApplyInteractionPlayer(
-                _selectedInteractive,
-                false,
-                _selectedInteractive != null);
-        }
-
-        private void UnbindPlayerInteractionBar()
-        {
-            if (_playerInteractionBarWidget == null)
-            {
-                return;
-            }
-
-            _playerInteractionBarWidget.PlayerClicked -=
-                HandleInteractionBarPlayerClicked;
-            _playerInteractionBarWidget.Unbind();
-        }
-
-        private void RebindPlayerInteractionBar()
-        {
-            if (_playerInteractionBarWidget == null)
-            {
-                return;
-            }
-
-            BuildPlayerInteractionSlotData();
-            _playerInteractionBarWidget.Bind(
-                _playerInteractionSlotData,
-                _playerInteractionBarStyle);
-        }
-
-        private void BuildPlayerInteractionSlotData()
-        {
-            _playerInteractionSlotData.Clear();
-            var selectedPlayer =
-                ResolveSelectedPlayer(_selectedInteractive);
-
-            for (var index = 0;
-                 index < _playerPawns.Count;
-                 index++)
-            {
-                var pawn = _playerPawns[index];
-                if (pawn == null)
-                {
-                    continue;
-                }
-
-                var definition = pawn.Definition;
-                var displayName =
-                    definition != null &&
-                    !string.IsNullOrWhiteSpace(
-                        definition.DisplayName)
-                        ? definition.DisplayName
-                        : pawn.name;
-                var portrait =
-                    definition != null ? definition.Portrait : null;
-
-                _playerInteractionSlotData.Add(
-                    new PlayerInteractionSlotData(
-                        pawn,
-                        _playerInteractionSlotData.Count + 1,
-                        displayName,
-                        portrait,
-                        pawn == selectedPlayer));
-            }
-        }
-
-        private void HandleInteractionBarPlayerClicked(
-            InteractivePawn pawn)
-        {
-            if (pawn != null)
-            {
-                SelectInteractive(pawn);
-            }
-        }
-
-        private void ApplyInteractionPlayer(
-            InteractivePawn selectedPawn,
-            bool animate,
-            bool focusCamera)
-        {
-            var selectedPlayer =
-                ResolveSelectedPlayer(selectedPawn);
-            _interactionPlayer = selectedPlayer;
-
-            if (_playerInteractionBarWidget != null)
-            {
-                _playerInteractionBarWidget.SetInteractionTarget(
-                    selectedPlayer,
-                    animate);
-            }
-
-            InteractionPlayerChanged?.Invoke(selectedPlayer);
-
-            if (focusCamera && selectedPlayer != null)
-            {
-                FocusCameraOnce(selectedPlayer);
-            }
-        }
-
-        private InteractivePawn ResolveSelectedPlayer(
-            InteractivePawn selectedPawn)
-        {
-            if (selectedPawn == null)
-            {
-                return null;
-            }
-
-            for (var index = 0;
-                 index < _playerPawns.Count;
-                 index++)
-            {
-                if (_playerPawns[index] == selectedPawn)
-                {
-                    return selectedPawn;
-                }
-            }
-
-            return null;
-        }
-
-        private void FocusCameraOnce(InteractivePawn pawn)
-        {
-            var snapshot = pawn.WorldPosition + _cameraFocusOffset;
-            var current = _boardCamera.transform.position;
-            var target = new Vector3(
-                snapshot.x,
-                snapshot.y,
-                current.z);
-
-            KillCameraFocusTween();
-
-            var sequence = DOTween.Sequence();
-            _cameraFocusTween = sequence;
-            sequence.SetUpdate(true);
-
-            if (_cameraStartDelay > 0f)
-            {
-                sequence.AppendInterval(_cameraStartDelay);
-            }
-
-            sequence.Append(
-                _boardCamera.transform
-                    .DOMove(
-                        target,
-                        Mathf.Max(0.01f, _cameraFocusDuration))
-                    .SetEase(_cameraFocusEase));
-            sequence.OnComplete(() =>
-            {
-                if (_cameraFocusTween == sequence)
-                {
-                    _cameraFocusTween = null;
-                }
-            });
-        }
-
-        private void KillCameraFocusTween()
-        {
-            _cameraFocusTween?.Kill();
-            _cameraFocusTween = null;
         }
 
         private void EnsureTurnButton()

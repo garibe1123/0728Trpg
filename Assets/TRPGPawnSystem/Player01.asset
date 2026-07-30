@@ -21,7 +21,7 @@ MonoBehaviour:
   _legacyMoveMeters: 0
   _legacyMoveMetersPerTurn: 0
   _movementScore: 40
-  _playerStats: {fileID: 11400000, guid: ca3636c8d89fc9e4c8735307bc840e7a, type: 2}
+  _characterStats: {fileID: 11400000, guid: d6c435ba9debaec4ca78f509e1c5ed67, type: 2}
   _movementStatToScoreMultiplier: 5
   _presentationMetersPerSecond: 6
   _presentationDurationSeconds: 0.5

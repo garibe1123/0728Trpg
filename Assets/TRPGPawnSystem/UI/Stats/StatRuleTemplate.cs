@@ -310,6 +310,14 @@ namespace Trpg.Data.Stats
                     CreateDamageBonusBands(),
                     StatDisplayKind.Dice),
                 Formula(
+                    "coc.dodge",
+                    "회피",
+                    260,
+                    "floor(coc.dex / 2)",
+                    0,
+                    100,
+                    true),
+                Formula(
                     "combat.melee_attack",
                     "근접 공격력",
                     300,
@@ -362,8 +370,11 @@ namespace Trpg.Data.Stats
                 new StatRoleBindingRecord(StatRole.SanityMax, "coc.san.max"),
                 new StatRoleBindingRecord(StatRole.Movement, "coc.mov"),
                 new StatRoleBindingRecord(StatRole.MeleeAttack, "combat.melee_attack"),
+                new StatRoleBindingRecord(StatRole.Defense, "coc.dodge"),
+                new StatRoleBindingRecord(StatRole.Initiative, "coc.dex"),
                 new StatRoleBindingRecord(StatRole.LuckCurrent, "coc.luck.current"),
-                new StatRoleBindingRecord(StatRole.LuckMax, "coc.luck")
+                new StatRoleBindingRecord(StatRole.LuckMax, "coc.luck"),
+                new StatRoleBindingRecord(StatRole.Dexterity, "coc.dex")
             };
         }
 

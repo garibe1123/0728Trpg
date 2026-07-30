@@ -29,6 +29,7 @@ namespace Trpg.Pawns
         private bool _hasVisualRestPosition;
         private Transform _movementTarget;
         private Quaternion _movementStartLocalRotation;
+        private Vector3 _movementCameraWorldPosition;
 
         public event Action<InteractivePawn> MovementPresentationCompleted;
         public event Action<InteractivePawn, InteractivePawn> DoorEntered;
@@ -41,6 +42,10 @@ namespace Trpg.Pawns
         public string LinkedDoorInstanceId => _linkedDoorInstanceId;
         public Vector2 ArrivalPosition =>
             _arrivalPoint != null ? _arrivalPoint.position : transform.position;
+        public Vector3 PresentationWorldPosition =>
+            _movementTween != null
+                ? _movementCameraWorldPosition
+                : transform.position;
 
         public override void Bind()
         {
@@ -90,6 +95,7 @@ namespace Trpg.Pawns
             _movementTarget = _visualRoot != null
                 ? _visualRoot
                 : transform;
+            _movementCameraWorldPosition = corners[0];
             _movementStartLocalRotation = _movementTarget.localRotation;
             var visualOffset =
                 _movementTarget.position - transform.position;
@@ -126,6 +132,7 @@ namespace Trpg.Pawns
             {
                 _movementTween = null;
                 transform.position = destination;
+                _movementCameraWorldPosition = destination;
                 RestoreMovementPose();
                 MovementPresentationCompleted?.Invoke(this);
             });
@@ -138,6 +145,7 @@ namespace Trpg.Pawns
                 destination.x,
                 destination.y,
                 transform.position.z);
+            _movementCameraWorldPosition = transform.position;
             RestoreMovementPose();
         }
 
@@ -267,6 +275,7 @@ namespace Trpg.Pawns
                 corners,
                 pathDistances,
                 travelled);
+            _movementCameraWorldPosition = pathPosition;
             var hop = EvaluateHop(progress) * hopHeight;
             _movementTarget.position = new Vector3(
                 pathPosition.x + visualOffset.x,

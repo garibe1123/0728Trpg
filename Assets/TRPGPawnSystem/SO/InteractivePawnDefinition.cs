@@ -1,13 +1,61 @@
+using System;
+using System.Collections.Generic;
+using Trpg.Data.Skills;
 using Trpg.Data.Stats;
+using Trpg.Domain.Stats;
 using UnityEngine;
 using UnityEngine.Serialization;
 
 namespace Trpg.Pawns
 {
+    [Serializable]
+    public sealed class PawnBaseStatRecord
+    {
+        [SerializeField, Tooltip("룰 템플릿에서 사용하는 스탯 ID")]
+        private string _statId;
+
+        [SerializeField] private float _value;
+
+        public string StatId => _statId;
+        public float Value => _value;
+
+        public PawnBaseStatRecord(string statId, float value)
+        {
+            _statId = statId;
+            _value = value;
+        }
+    }
+
+    [Serializable]
+    public sealed class PawnSkillRecord
+    {
+        [SerializeField, Tooltip("기술 이름과 미훈련 기본치를 정의하는 Skill SO")]
+        private SkillDefinition _definition;
+
+        [SerializeField, Tooltip(
+            "끄면 Skill SO의 미훈련 기본치를 사용하고, 켜면 아래 보통 성공값을 사용")]
+        private bool _overrideBaseValue = true;
+
+        [SerializeField, Min(0), Tooltip(
+            "이 캐릭터의 보통 성공 기준값. 어려움과 극단적 성공값은 자동 계산")]
+        private int _regularValue;
+
+        public SkillDefinition Definition => _definition;
+        public bool UsesBaseValue => !_overrideBaseValue;
+        public int RegularValue =>
+            _overrideBaseValue
+                ? Mathf.Max(0, _regularValue)
+                : _definition != null
+                    ? _definition.BaseValue
+                    : 0;
+    }
+
     [CreateAssetMenu(
         menuName = "Trpg/Pawn/Interactive Pawn Definition",
         fileName = "InteractivePawnDefinition")]
-    public sealed class InteractivePawnDefinition : ScriptableObject
+    public sealed class InteractivePawnDefinition :
+        ScriptableObject,
+        ICharacterStatDefinition
     {
         [SerializeField, Tooltip("콘텐츠 식별 ID")]
         private string _id = "interactive_new";
@@ -38,18 +86,33 @@ namespace Trpg.Pawns
         private int _legacyMoveMetersPerTurn;
 
         [SerializeField, Range(10, 100), Tooltip(
-            "Player 스탯을 사용하지 못할 때 쓰는 이동 능력치입니다.")]
+            "캐릭터 스탯을 사용할 수 없을 때의 이동 능력치")]
         private int _movementScore = 40;
 
-        [Header("Player Stats")]
+        [Header("Stats")]
         [SerializeField, Tooltip(
-            "Player Pawn이 사용할 캐릭터별 기본 스탯 SO입니다. NPC와 Monster에서는 사용하지 않습니다.")]
-        private CharacterStatDefinition _playerStats;
+            "비워두면 내장 CoC 7판 규칙을 사용합니다. 다른 룰북을 쓸 때만 연결하십시오.")]
+        private StatRuleTemplate _statRuleTemplate;
+
+        [SerializeField, Tooltip(
+            "이 Pawn의 기본 스탯 값입니다. 기본 구성은 CoC 7판입니다.")]
+        private List<PawnBaseStatRecord> _baseStats =
+            CreateDefaultCocStats();
 
         [SerializeField, Min(0.01f), Tooltip(
-            "룰 템플릿의 Movement 값을 기존 MovementScore로 환산하는 배율입니다. " +
-            "예: CoC MOV 8을 MovementScore 40으로 쓰려면 5를 지정합니다.")]
+            "룰 템플릿의 Movement 값을 기존 MovementScore로 바꾸는 배율. " +
+            "CoC MOV 8을 MovementScore 40으로 쓰려면 5")]
         private float _movementStatToScoreMultiplier = 5f;
+
+        [Header("Skills")]
+        [SerializeField, Tooltip(
+            "런타임 스킬 추가 UI에서 사용할 전체 스킬 카탈로그")]
+        private SkillCatalogDefinition _skillCatalog;
+
+        [SerializeField, Tooltip(
+            "이 캐릭터의 스킬 목록. 기술별 보통 성공값만 저장하고 어려움/극단은 자동 계산합니다.")]
+        private List<PawnSkillRecord> _skills =
+            new List<PawnSkillRecord>();
 
         [SerializeField, HideInInspector]
         private float _presentationMetersPerSecond = 6f;
@@ -71,30 +134,65 @@ namespace Trpg.Pawns
             "선택 상태에서 적용할 Pawn 균일 확대 배율")]
         private float _selectedScale = 1.08f;
 
+        private readonly List<StatBaseValue> _baseStatCache =
+            new List<StatBaseValue>();
+
         public string Id => _id;
         public InteractivePawnKind Kind => _kind;
         public MoveablePawnKind MoveableKind => _moveableKind;
         public string DisplayName => _displayName;
         public string Description => _description;
         public Sprite Portrait => _portrait;
-        public bool IsPlayer =>
-            _kind == InteractivePawnKind.Moveable &&
-            _moveableKind == MoveablePawnKind.Player;
-        public CharacterStatDefinition PlayerStats =>
-            IsPlayer ? _playerStats : null;
+        public StatRuleTemplate StatRuleTemplateAsset => _statRuleTemplate;
+        public IStatRuleTemplate EffectiveStatRuleTemplate =>
+            _statRuleTemplate != null
+                ? _statRuleTemplate
+                : StatRuleTemplateDefaults.Coc7;
+        public bool UsesBuiltInCocRules => _statRuleTemplate == null;
+        public SkillCatalogDefinition SkillCatalog => _skillCatalog;
+        public IReadOnlyList<PawnSkillRecord> Skills => _skills;
+        IStatRuleTemplate ICharacterStatDefinition.RuleTemplate =>
+            EffectiveStatRuleTemplate;
+        public IReadOnlyList<StatBaseValue> BaseValues
+        {
+            get
+            {
+                _baseStatCache.Clear();
+                if (_baseStats == null)
+                    return _baseStatCache;
+
+                for (var index = 0; index < _baseStats.Count; index++)
+                {
+                    var value = _baseStats[index];
+                    if (value != null)
+                    {
+                        _baseStatCache.Add(
+                            new StatBaseValue(
+                                value.StatId,
+                                value.Value));
+                    }
+                }
+
+                return _baseStatCache;
+            }
+        }
         public float MovementStatToScoreMultiplier =>
             Mathf.Max(0.01f, _movementStatToScoreMultiplier);
         public int MovementScore
         {
             get
             {
-                var legacyMeters = ResolveLegacyMoveMeters();
-                return legacyMeters > 0f
-                    ? Mathf.Clamp(
-                        Mathf.RoundToInt(legacyMeters / 0.2f),
-                        10,
-                        100)
-                    : Mathf.Clamp(_movementScore, 10, 100);
+                var fallback = ResolveFallbackMovementScore();
+                try
+                {
+                    var runtime = new StatRuntimeState(this);
+                    return ResolveMovementScore(runtime, fallback);
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogException(exception, this);
+                    return fallback;
+                }
             }
         }
         public float PresentationMetersPerSecond => _presentationMetersPerSecond;
@@ -107,6 +205,112 @@ namespace Trpg.Pawns
         public float SelectedScale =>
             Mathf.Clamp(_selectedScale, 1f, 2f);
 
+        public bool TryGetDefaultStatValue(
+            StatRole role,
+            out double value)
+        {
+            value = 0d;
+            try
+            {
+                var runtime = new StatRuntimeState(this);
+                var statId = runtime.Template.GetStatId(role);
+                if (string.IsNullOrWhiteSpace(statId) ||
+                    !runtime.TryGetDefinition(statId, out _))
+                {
+                    return false;
+                }
+
+                value = runtime.GetNumber(statId);
+                return true;
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception, this);
+                return false;
+            }
+        }
+
+        public int ResolveDexterity(int fallback = 50)
+        {
+            return TryGetDefaultStatValue(
+                    StatRole.Dexterity,
+                    out var dexterity)
+                ? Mathf.Clamp(
+                    Mathf.RoundToInt((float)dexterity),
+                    0,
+                    9999)
+                : Mathf.Max(0, fallback);
+        }
+
+        public int ResolveInitiative(int fallback = 50)
+        {
+            return TryGetDefaultStatValue(
+                    StatRole.Initiative,
+                    out var initiative)
+                ? Mathf.Clamp(
+                    Mathf.RoundToInt((float)initiative),
+                    0,
+                    9999)
+                : Mathf.Max(0, fallback);
+        }
+
+        public int ResolveMovementScore(
+            IStatValueProvider statProvider,
+            int fallback = -1)
+        {
+            var resolvedFallback = fallback >= 0
+                ? Mathf.Clamp(fallback, 10, 100)
+                : ResolveFallbackMovementScore();
+
+            if (statProvider == null ||
+                !statProvider.TryGetRoleNumber(
+                    StatRole.Movement,
+                    out var movement))
+            {
+                return resolvedFallback;
+            }
+
+            return Mathf.Clamp(
+                Mathf.RoundToInt(
+                    (float)movement *
+                    MovementStatToScoreMultiplier),
+                10,
+                100);
+        }
+
+        private int ResolveMovementScore(
+            StatRuntimeState runtime,
+            int fallback)
+        {
+            var movementStatId =
+                runtime.Template.GetStatId(StatRole.Movement);
+            if (string.IsNullOrWhiteSpace(movementStatId) ||
+                !runtime.TryGetDefinition(
+                    movementStatId,
+                    out _))
+            {
+                return fallback;
+            }
+
+            return Mathf.Clamp(
+                Mathf.RoundToInt(
+                    (float)runtime.GetNumber(movementStatId) *
+                    MovementStatToScoreMultiplier),
+                10,
+                100);
+        }
+
+        private int ResolveFallbackMovementScore()
+        {
+            var legacyMeters = ResolveLegacyMoveMeters();
+            return legacyMeters > 0f
+                ? Mathf.Clamp(
+                    Mathf.RoundToInt(legacyMeters / 0.2f),
+                    10,
+                    100)
+                : Mathf.Clamp(_movementScore, 10, 100);
+        }
+
         private float ResolveLegacyMoveMeters()
         {
             if (_legacyMoveMeters > 0f)
@@ -117,6 +321,34 @@ namespace Trpg.Pawns
             return _legacyMoveMetersPerTurn > 0
                 ? _legacyMoveMetersPerTurn
                 : 0f;
+        }
+
+        [ContextMenu("Reset Stats To Built-In CoC 7th")]
+        public void ResetStatsToBuiltInCoc()
+        {
+            _statRuleTemplate = null;
+            _baseStats = CreateDefaultCocStats();
+
+#if UNITY_EDITOR
+            UnityEditor.EditorUtility.SetDirty(this);
+#endif
+        }
+
+        public static List<PawnBaseStatRecord> CreateDefaultCocStats()
+        {
+            return new List<PawnBaseStatRecord>
+            {
+                new PawnBaseStatRecord("coc.str", 50),
+                new PawnBaseStatRecord("coc.con", 50),
+                new PawnBaseStatRecord("coc.siz", 50),
+                new PawnBaseStatRecord("coc.dex", 50),
+                new PawnBaseStatRecord("coc.app", 50),
+                new PawnBaseStatRecord("coc.int", 50),
+                new PawnBaseStatRecord("coc.pow", 50),
+                new PawnBaseStatRecord("coc.edu", 50),
+                new PawnBaseStatRecord("coc.luck", 50),
+                new PawnBaseStatRecord("coc.cthulhu_mythos", 0)
+            };
         }
 
 #if UNITY_EDITOR
@@ -138,11 +370,62 @@ namespace Trpg.Pawns
                 Debug.LogError($"[{name}] Definition Id가 비어 있습니다.", this);
             }
 
-            if (IsPlayer && _playerStats == null)
+            if (_baseStats == null)
             {
-                Debug.LogError(
-                    $"[{name}] Player Pawn에는 Character Stat Definition이 필요합니다.",
-                    this);
+                _baseStats = CreateDefaultCocStats();
+                return;
+            }
+
+            var ids = new HashSet<string>(StringComparer.Ordinal);
+            for (var index = 0; index < _baseStats.Count; index++)
+            {
+                var value = _baseStats[index];
+                if (value == null ||
+                    string.IsNullOrWhiteSpace(value.StatId))
+                {
+                    Debug.LogError(
+                        $"[{name}] {index}번 기본 스탯 ID가 비어 있습니다.",
+                        this);
+                    continue;
+                }
+
+                if (!ids.Add(value.StatId))
+                {
+                    Debug.LogError(
+                        $"[{name}] 중복 기본 스탯 ID: {value.StatId}",
+                        this);
+                }
+            }
+
+            if (_skills == null)
+            {
+                _skills = new List<PawnSkillRecord>();
+                return;
+            }
+
+            var skillIds =
+                new HashSet<string>(StringComparer.Ordinal);
+            for (var index = 0; index < _skills.Count; index++)
+            {
+                var record = _skills[index];
+                if (record == null || record.Definition == null)
+                {
+                    Debug.LogError(
+                        $"[{name}] {index}번 Skill Definition이 비어 있습니다.",
+                        this);
+                    continue;
+                }
+
+                var skillId = record.Definition.Id;
+                if (string.IsNullOrWhiteSpace(skillId))
+                    continue;
+
+                if (!skillIds.Add(skillId))
+                {
+                    Debug.LogError(
+                        $"[{name}] 중복 Skill ID: {skillId}",
+                        this);
+                }
             }
         }
 #endif

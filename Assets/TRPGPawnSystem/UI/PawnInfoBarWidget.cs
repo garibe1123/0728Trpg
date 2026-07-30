@@ -27,6 +27,22 @@ namespace Trpg.Pawns
 
     public sealed class PawnInfoBarWidget : MonoBehaviour
     {
+        private const float CompactPanelMinimumWidth = 900f;
+        private const float CompactPanelMaximumWidth = 1320f;
+        private const float CompactPanelSideMargin = 24f;
+        private const float CompactPanelMinimumHeight = 196f;
+        private const float PortraitLayoutSize = 160f;
+        private const float PortraitLayoutLeft = 20f;
+        private const float ResourceLayoutLeft = 204f;
+        private const float ResourceLayoutBottom = 18f;
+        private const float ResourceLayoutWidth = 414f;
+        private const float ResourceLayoutHeight = 138f;
+        private const float ActionButtonWidth = 164f;
+        private const float ActionButtonHeight = 72f;
+        private const float ActionButtonSpacing = 10f;
+        private const float ActionRightInset = 24f;
+        private const float ActionBottomInset = 30f;
+
         [SerializeField] private RectTransform _panel;
         [SerializeField] private CanvasGroup _canvasGroup;
         [SerializeField] private Image _portraitImage;
@@ -45,6 +61,13 @@ namespace Trpg.Pawns
         [SerializeField, Tooltip(
             "비어 있으면 정보 바 안에 굴림 UI를 런타임 생성")]
         private PawnRollWidget _rollWidget;
+        private PawnStatPanelWidget _statPanel;
+        private PawnResourceBarWidget _resourceBar;
+        private Button _statToggleButton;
+        private Graphic _statToggleGraphic;
+        private RectTransform _actionGroup;
+        private RectTransform _checkRollButtonRect;
+        private RectTransform _effectRollButtonRect;
 
         private GameObject _ownedBoardOverlayCanvas;
         private Vector2 _shownPosition;
@@ -59,9 +82,9 @@ namespace Trpg.Pawns
         private float _remainingMovementMeters;
         private float _maximumMovementMeters;
         private Image _moveButtonImage;
-        private bool _contentOffsetsCaptured;
-        private Vector2 _baseNameOffsetMax;
-        private Vector2 _baseDescriptionOffsetMax;
+        private bool _isApplyingCompactLayout;
+        private bool _hasCompactLayout;
+        private float _hiddenPadding;
 
         public event Action CloseRequested;
         public event Action MoveRequested;
@@ -69,6 +92,20 @@ namespace Trpg.Pawns
         public event Action<PawnCheckRollRequest> CheckRollRequested;
         public event Action<PawnEffectRollRequest> EffectRollRequested;
         public event Action RollPresentationCompleted;
+        public event Action<string, double> StatValueEditRequested;
+        public event Action<string, double>
+            ResourceStatValueEditRequested;
+        public event Action<string, double>
+            PlayerStatValueEditRequested;
+        public event Action<PawnSkillAddRequest>
+            PlayerSkillAddRequested;
+        public event Action<PawnSkillNameEditRequest>
+            PlayerSkillNameEditRequested;
+        public event Action<PawnSkillRegularEditRequest>
+            PlayerSkillRegularEditRequested;
+        public event Action<PawnSkillRemoveRequest>
+            PlayerSkillRemoveRequested;
+        public event Action PlayerHudRequested;
 
         public static PawnInfoBarWidget CreateRuntime(
             PawnSystemSettings settings)
@@ -87,6 +124,9 @@ namespace Trpg.Pawns
             SetMovementModeState(false, false);
             EnsureRollWidget();
             _rollWidget?.SetButtonsEnabled(true);
+            EnsureResourceBar();
+            EnsureStatPanel();
+            EnsureStatToggleButton();
             Show();
         }
         public void Unbind()
@@ -98,8 +138,58 @@ namespace Trpg.Pawns
             SetMovementModeState(false, false);
             _rollWidget?.CancelPresentation();
             _rollWidget?.SetButtonsEnabled(false);
+            ClearResourceStats();
+            _statPanel?.SetExpanded(false);
             SetPathPreview(PawnPathPreviewData.Hidden);
             SetMovementRange(PawnMovementRangeData.Hidden);
+        }
+        public void SetStats(in PawnStatPanelData data)
+        {
+            SetResourceStats(data.Resources);
+            SetPlayerStats(data);
+        }
+        public void SetResourceStats(
+            System.Collections.Generic.IReadOnlyList<
+                PawnResourceValueData> resources)
+        {
+            EnsureResourceBar();
+            _resourceBar?.Bind(resources);
+            if (_descriptionText != null)
+                _descriptionText.gameObject.SetActive(false);
+            RefreshResourceBarLayout();
+        }
+        public void ClearResourceStats()
+        {
+            _resourceBar?.Clear();
+            if (_descriptionText != null)
+                _descriptionText.gameObject.SetActive(true);
+        }
+        public void SetPlayerStats(in PawnStatPanelData data)
+        {
+            EnsureStatPanel();
+            EnsureStatToggleButton();
+            _statPanel?.Bind(data);
+            if (_statToggleButton != null)
+            {
+                _statToggleButton.gameObject.SetActive(true);
+                _statToggleButton.interactable = true;
+            }
+            RefreshStatToggleVisual();
+        }
+        public void ClearPlayerStats()
+        {
+            _statPanel?.Clear();
+            if (_statToggleButton != null)
+            {
+                _statToggleButton.interactable = false;
+                _statToggleButton.gameObject.SetActive(false);
+            }
+            RefreshStatToggleVisual();
+        }
+        public void ClearStats()
+        {
+            ClearResourceStats();
+            ClearPlayerStats();
         }
         public void SetRollButtonsEnabled(bool enabled)
         {
@@ -301,6 +391,8 @@ namespace Trpg.Pawns
             _canvasRect = canvasRect;
             _showDuration = showDuration;
             _hideDuration = hideDuration;
+            _hiddenPadding = hiddenPadding;
+            ApplyCompactPanelLayout();
             _shownPosition = panel.anchoredPosition;
             _hiddenPosition = _shownPosition +
                 Vector2.down * (panel.rect.height + hiddenPadding);
@@ -311,8 +403,15 @@ namespace Trpg.Pawns
             EnsureMoveButton();
             BindMoveButton();
             BindCloseButton();
+            EnsureActionGroup();
             EnsureRollWidget();
             BindRollWidget();
+            EnsureResourceBar();
+            BindResourceBar();
+            EnsureStatPanel();
+            BindStatPanel();
+            EnsureStatToggleButton();
+            BindStatToggleButton();
         }
 
         private void PositionCursorBadge(Vector2 screenPosition)
@@ -347,15 +446,23 @@ namespace Trpg.Pawns
             EnsureMoveButton();
             BindMoveButton();
             BindCloseButton();
+            EnsureActionGroup();
             EnsureRollWidget();
             BindRollWidget();
-            _rollWidget?.RefreshResponsiveLayout();
+            EnsureResourceBar();
+            BindResourceBar();
+            EnsureStatPanel();
+            BindStatPanel();
+            EnsureStatToggleButton();
+            BindStatToggleButton();
+            _statPanel?.RefreshResponsiveLayout();
             ApplyActionRowContentPadding();
         }
 
         private void OnRectTransformDimensionsChange()
         {
-            _rollWidget?.RefreshResponsiveLayout();
+            ApplyCompactPanelLayout();
+            _statPanel?.RefreshResponsiveLayout();
             ApplyActionRowContentPadding();
         }
 
@@ -364,8 +471,12 @@ namespace Trpg.Pawns
             UnbindMoveButton();
             UnbindCloseButton();
             UnbindRollWidget();
+            UnbindResourceBar();
+            UnbindStatPanel();
+            UnbindStatToggleButton();
             KillTransition();
             _rollWidget?.CancelPresentation();
+            ClearStats();
             ClearBoardOverlay();
         }
 
@@ -374,6 +485,9 @@ namespace Trpg.Pawns
             UnbindMoveButton();
             UnbindCloseButton();
             UnbindRollWidget();
+            UnbindResourceBar();
+            UnbindStatPanel();
+            UnbindStatToggleButton();
             if (_ownedBoardOverlayCanvas != null)
             {
                 Destroy(_ownedBoardOverlayCanvas);
@@ -387,6 +501,14 @@ namespace Trpg.Pawns
             CheckRollRequested = null;
             EffectRollRequested = null;
             RollPresentationCompleted = null;
+            StatValueEditRequested = null;
+            ResourceStatValueEditRequested = null;
+            PlayerStatValueEditRequested = null;
+            PlayerSkillAddRequested = null;
+            PlayerSkillNameEditRequested = null;
+            PlayerSkillRegularEditRequested = null;
+            PlayerSkillRemoveRequested = null;
+            PlayerHudRequested = null;
         }
 
         private void HandleCloseClicked()
@@ -511,10 +633,6 @@ namespace Trpg.Pawns
         {
             if (_rollWidget != null || _panel == null)
             {
-                _rollWidget?.ConfigureResponsiveLayout(
-                    _moveButton,
-                    _canvasRect,
-                    _panel);
                 ApplyActionRowContentPadding();
                 return;
             }
@@ -522,44 +640,34 @@ namespace Trpg.Pawns
             _rollWidget = PawnRollWidget.CreateRuntime(
                 _panel,
                 _movementText != null ? _movementText.font : null);
-            _rollWidget.ConfigureResponsiveLayout(
-                _moveButton,
-                _canvasRect,
-                _panel);
             ApplyActionRowContentPadding();
+        }
+
+        private void EnsureActionGroup()
+        {
+            if (_actionGroup != null || _panel == null)
+                return;
+
+            var root = new GameObject(
+                "PawnActionButtonGroup",
+                typeof(RectTransform));
+            _actionGroup = root.GetComponent<RectTransform>();
+            _actionGroup.SetParent(_panel, false);
+            _actionGroup.anchorMin = new Vector2(1f, 0f);
+            _actionGroup.anchorMax = new Vector2(1f, 0f);
+            _actionGroup.pivot = new Vector2(1f, 0f);
+            _actionGroup.anchoredPosition =
+                new Vector2(-ActionRightInset, ActionBottomInset);
+            _actionGroup.sizeDelta =
+                new Vector2(
+                    ActionButtonWidth * 3f +
+                    ActionButtonSpacing * 2f,
+                    ActionButtonHeight);
         }
 
         private void ApplyActionRowContentPadding()
         {
-            if (_rollWidget == null ||
-                _nameText == null ||
-                _descriptionText == null)
-            {
-                return;
-            }
-
-            if (!_contentOffsetsCaptured)
-            {
-                _baseNameOffsetMax =
-                    _nameText.rectTransform.offsetMax;
-                _baseDescriptionOffsetMax =
-                    _descriptionText.rectTransform.offsetMax;
-                _contentOffsetsCaptured = true;
-            }
-
-            var reservedRight = Mathf.Max(
-                _rollWidget.ReservedRightWidth,
-                Mathf.Abs(_baseNameOffsetMax.x));
-            var nameOffset =
-                _baseNameOffsetMax;
-            nameOffset.x = -reservedRight;
-            _nameText.rectTransform.offsetMax = nameOffset;
-
-            var descriptionOffset =
-                _baseDescriptionOffsetMax;
-            descriptionOffset.x = -reservedRight;
-            _descriptionText.rectTransform.offsetMax =
-                descriptionOffset;
+            ApplyStructuredPanelLayout();
         }
 
         private void BindRollWidget()
@@ -611,6 +719,488 @@ namespace Trpg.Pawns
         private void HandleRollPresentationCompleted()
         {
             RollPresentationCompleted?.Invoke();
+        }
+
+        private void EnsureStatPanel()
+        {
+            if (_statPanel != null || _canvasRect == null)
+                return;
+
+            _statPanel = PawnStatPanelWidget.CreateRuntime(
+                _canvasRect,
+                _movementText != null ? _movementText.font : null);
+        }
+
+        private void BindStatPanel()
+        {
+            if (_statPanel == null)
+                return;
+
+            _statPanel.ValueEditRequested -=
+                HandlePlayerStatValueEditRequested;
+            _statPanel.ValueEditRequested +=
+                HandlePlayerStatValueEditRequested;
+            _statPanel.SkillAddRequested -=
+                HandlePlayerSkillAddRequested;
+            _statPanel.SkillAddRequested +=
+                HandlePlayerSkillAddRequested;
+            _statPanel.SkillNameEditRequested -=
+                HandlePlayerSkillNameEditRequested;
+            _statPanel.SkillNameEditRequested +=
+                HandlePlayerSkillNameEditRequested;
+            _statPanel.SkillRegularEditRequested -=
+                HandlePlayerSkillRegularEditRequested;
+            _statPanel.SkillRegularEditRequested +=
+                HandlePlayerSkillRegularEditRequested;
+            _statPanel.SkillRemoveRequested -=
+                HandlePlayerSkillRemoveRequested;
+            _statPanel.SkillRemoveRequested +=
+                HandlePlayerSkillRemoveRequested;
+            _statPanel.SummaryClicked -=
+                HandlePlayerHudRequested;
+            _statPanel.SummaryClicked +=
+                HandlePlayerHudRequested;
+            _statPanel.ExpandedChanged -=
+                HandleStatPanelExpandedChanged;
+            _statPanel.ExpandedChanged +=
+                HandleStatPanelExpandedChanged;
+            _statPanel.QuickCheckRequested -=
+                HandleQuickCheckRequested;
+            _statPanel.QuickCheckRequested +=
+                HandleQuickCheckRequested;
+        }
+
+        private void UnbindStatPanel()
+        {
+            if (_statPanel != null)
+            {
+                _statPanel.ValueEditRequested -=
+                    HandlePlayerStatValueEditRequested;
+                _statPanel.SkillAddRequested -=
+                    HandlePlayerSkillAddRequested;
+                _statPanel.SkillNameEditRequested -=
+                    HandlePlayerSkillNameEditRequested;
+                _statPanel.SkillRegularEditRequested -=
+                    HandlePlayerSkillRegularEditRequested;
+                _statPanel.SkillRemoveRequested -=
+                    HandlePlayerSkillRemoveRequested;
+                _statPanel.SummaryClicked -=
+                    HandlePlayerHudRequested;
+                _statPanel.ExpandedChanged -=
+                    HandleStatPanelExpandedChanged;
+                _statPanel.QuickCheckRequested -=
+                    HandleQuickCheckRequested;
+            }
+        }
+
+        private void HandlePlayerStatValueEditRequested(
+            string statId,
+            double value)
+        {
+            PlayerStatValueEditRequested?.Invoke(statId, value);
+            StatValueEditRequested?.Invoke(statId, value);
+        }
+
+        private void HandlePlayerSkillAddRequested(
+            PawnSkillAddRequest request)
+        {
+            PlayerSkillAddRequested?.Invoke(request);
+        }
+
+        private void HandlePlayerSkillNameEditRequested(
+            PawnSkillNameEditRequest request)
+        {
+            PlayerSkillNameEditRequested?.Invoke(request);
+        }
+
+        private void HandlePlayerSkillRegularEditRequested(
+            PawnSkillRegularEditRequest request)
+        {
+            PlayerSkillRegularEditRequested?.Invoke(request);
+        }
+
+        private void HandlePlayerSkillRemoveRequested(
+            PawnSkillRemoveRequest request)
+        {
+            PlayerSkillRemoveRequested?.Invoke(request);
+        }
+
+        private void HandlePlayerHudRequested()
+        {
+            PlayerHudRequested?.Invoke();
+        }
+
+        private void HandleQuickCheckRequested()
+        {
+            _statPanel?.SetExpanded(false);
+            CheckRollRequested?.Invoke(
+                default(PawnCheckRollRequest));
+        }
+
+        private void EnsureResourceBar()
+        {
+            if (_resourceBar != null || _panel == null)
+                return;
+
+            _resourceBar = PawnResourceBarWidget.CreateRuntime(
+                _panel,
+                _movementText != null ? _movementText.font : null);
+            RefreshResourceBarLayout();
+        }
+
+        private void RefreshResourceBarLayout()
+        {
+            if (_resourceBar == null || _panel == null)
+                return;
+
+            _resourceBar.SetLayoutArea(
+                ResourceLayoutLeft,
+                ResourceLayoutBottom,
+                ResourceLayoutWidth,
+                ResourceLayoutHeight);
+        }
+
+        private void ApplyCompactPanelLayout()
+        {
+            if (_isApplyingCompactLayout ||
+                _panel == null ||
+                _canvasRect == null)
+            {
+                return;
+            }
+
+            _isApplyingCompactLayout = true;
+            var availableWidth = Mathf.Max(
+                360f,
+                _canvasRect.rect.width -
+                CompactPanelSideMargin * 2f);
+            var targetWidth = Mathf.Clamp(
+                availableWidth,
+                CompactPanelMinimumWidth,
+                CompactPanelMaximumWidth);
+            var verticalPosition = _hasCompactLayout
+                ? _shownPosition.y
+                : _panel.anchoredPosition.y;
+            _panel.anchorMin = new Vector2(0.5f, 0f);
+            _panel.anchorMax = new Vector2(0.5f, 0f);
+            _panel.pivot = new Vector2(0.5f, 0f);
+            _panel.sizeDelta = new Vector2(
+                targetWidth,
+                Mathf.Max(
+                    CompactPanelMinimumHeight,
+                    _panel.sizeDelta.y));
+            _panel.anchoredPosition = new Vector2(
+                0f,
+                verticalPosition);
+            _shownPosition = _panel.anchoredPosition;
+            _hiddenPosition = _shownPosition +
+                Vector2.down *
+                (_panel.rect.height +
+                 Mathf.Max(
+                     CompactPanelSideMargin,
+                     _hiddenPadding));
+            if (_hasCompactLayout)
+            {
+                _panel.anchoredPosition =
+                    _isVisible
+                        ? _shownPosition
+                        : _hiddenPosition;
+            }
+            else
+            {
+                _hasCompactLayout = true;
+            }
+            ApplyStructuredPanelLayout();
+            _isApplyingCompactLayout = false;
+        }
+
+        private void ApplyStructuredPanelLayout()
+        {
+            if (_panel == null)
+                return;
+
+            if (_portraitImage != null)
+            {
+                var portraitRect = _portraitImage.rectTransform;
+                portraitRect.anchorMin = new Vector2(0f, 0.5f);
+                portraitRect.anchorMax = new Vector2(0f, 0.5f);
+                portraitRect.pivot = new Vector2(0f, 0.5f);
+                portraitRect.anchoredPosition =
+                    new Vector2(PortraitLayoutLeft, 0f);
+                portraitRect.sizeDelta =
+                    Vector2.one * PortraitLayoutSize;
+            }
+
+            if (_nameText != null)
+            {
+                var nameRect = _nameText.rectTransform;
+                nameRect.anchorMin = Vector2.zero;
+                nameRect.anchorMax = Vector2.zero;
+                nameRect.pivot = Vector2.zero;
+                nameRect.anchoredPosition =
+                    new Vector2(ResourceLayoutLeft, 162f);
+                nameRect.sizeDelta =
+                    new Vector2(ResourceLayoutWidth, 26f);
+                _nameText.alignment = TextAnchor.MiddleLeft;
+            }
+
+            if (_descriptionText != null)
+            {
+                var descriptionRect = _descriptionText.rectTransform;
+                descriptionRect.anchorMin = Vector2.zero;
+                descriptionRect.anchorMax = Vector2.zero;
+                descriptionRect.pivot = Vector2.zero;
+                descriptionRect.anchoredPosition =
+                    new Vector2(ResourceLayoutLeft, 18f);
+                descriptionRect.sizeDelta =
+                    new Vector2(ResourceLayoutWidth, 138f);
+            }
+
+            RefreshResourceBarLayout();
+            ApplyActionButtonLayout();
+        }
+
+        private void ApplyActionButtonLayout()
+        {
+            EnsureMoveButton();
+            EnsureActionGroup();
+            CacheRollActionButtons();
+            if (_actionGroup == null)
+                return;
+
+            var minimumStartX =
+                ResourceLayoutLeft +
+                ResourceLayoutWidth +
+                24f;
+            var availableActionWidth = Mathf.Max(
+                236f,
+                _panel.rect.width -
+                ActionRightInset -
+                minimumStartX);
+            var buttonWidth = Mathf.Min(
+                ActionButtonWidth,
+                (availableActionWidth -
+                 ActionButtonSpacing * 2f) / 3f);
+            var totalWidth =
+                buttonWidth * 3f +
+                ActionButtonSpacing * 2f;
+            _actionGroup.anchorMin = new Vector2(1f, 0f);
+            _actionGroup.anchorMax = new Vector2(1f, 0f);
+            _actionGroup.pivot = new Vector2(1f, 0f);
+            _actionGroup.anchoredPosition =
+                new Vector2(-ActionRightInset, ActionBottomInset);
+            _actionGroup.sizeDelta =
+                new Vector2(totalWidth, ActionButtonHeight);
+
+            SetActionButtonRect(
+                _moveButton != null
+                    ? _moveButton.GetComponent<RectTransform>()
+                    : null,
+                _actionGroup,
+                Vector2.zero,
+                buttonWidth);
+
+            var rollRect = _rollWidget != null
+                ? _rollWidget.transform as RectTransform
+                : null;
+            if (rollRect == null)
+                return;
+
+            rollRect.SetParent(_actionGroup, false);
+            rollRect.anchorMin = Vector2.zero;
+            rollRect.anchorMax = Vector2.zero;
+            rollRect.pivot = Vector2.zero;
+            rollRect.anchoredPosition = new Vector2(
+                buttonWidth +
+                ActionButtonSpacing,
+                0f);
+            rollRect.sizeDelta = new Vector2(
+                buttonWidth * 2f +
+                ActionButtonSpacing,
+                ActionButtonHeight);
+
+            SetActionButtonRect(
+                _checkRollButtonRect,
+                rollRect,
+                Vector2.zero,
+                buttonWidth);
+            SetActionButtonRect(
+                _effectRollButtonRect,
+                rollRect,
+                new Vector2(
+                    buttonWidth +
+                    ActionButtonSpacing,
+                    0f),
+                buttonWidth);
+        }
+
+        private void CacheRollActionButtons()
+        {
+            if (_rollWidget == null ||
+                (_checkRollButtonRect != null &&
+                 _effectRollButtonRect != null))
+            {
+                return;
+            }
+
+            var buttons =
+                _rollWidget.GetComponentsInChildren<Button>(true);
+            for (var index = 0; index < buttons.Length; index++)
+            {
+                var button = buttons[index];
+                if (button == null)
+                    continue;
+
+                if (button.name == "CheckRollButton")
+                {
+                    _checkRollButtonRect =
+                        button.transform as RectTransform;
+                }
+                else if (button.name == "EffectRollButton")
+                {
+                    _effectRollButtonRect =
+                        button.transform as RectTransform;
+                }
+            }
+        }
+
+        private static void SetActionButtonRect(
+            RectTransform rect,
+            RectTransform parent,
+            Vector2 position,
+            float width)
+        {
+            if (rect == null || parent == null)
+                return;
+
+            rect.SetParent(parent, false);
+            rect.anchorMin = Vector2.zero;
+            rect.anchorMax = Vector2.zero;
+            rect.pivot = Vector2.zero;
+            rect.anchoredPosition = position;
+            rect.sizeDelta = new Vector2(
+                Mathf.Max(72f, width),
+                ActionButtonHeight);
+        }
+
+        private void BindResourceBar()
+        {
+            if (_resourceBar == null)
+                return;
+
+            _resourceBar.ValueEditRequested -=
+                HandleResourceStatValueEditRequested;
+            _resourceBar.ValueEditRequested +=
+                HandleResourceStatValueEditRequested;
+        }
+
+        private void UnbindResourceBar()
+        {
+            if (_resourceBar != null)
+            {
+                _resourceBar.ValueEditRequested -=
+                    HandleResourceStatValueEditRequested;
+            }
+        }
+
+        private void HandleResourceStatValueEditRequested(
+            string statId,
+            double value)
+        {
+            ResourceStatValueEditRequested?.Invoke(statId, value);
+            StatValueEditRequested?.Invoke(statId, value);
+        }
+
+        private void EnsureStatToggleButton()
+        {
+            if (_statToggleButton != null || _panel == null)
+                return;
+
+            var buttonObject = new GameObject(
+                "StatToggleButton",
+                typeof(RectTransform),
+                typeof(CanvasRenderer),
+                typeof(PawnCircleGraphic),
+                typeof(Button));
+            var rect = buttonObject.GetComponent<RectTransform>();
+            rect.SetParent(_panel, false);
+            rect.anchorMin = Vector2.one;
+            rect.anchorMax = Vector2.one;
+            rect.pivot = Vector2.one;
+            rect.anchoredPosition = new Vector2(-52f, -10f);
+            rect.sizeDelta = new Vector2(38f, 38f);
+
+            _statToggleGraphic =
+                buttonObject.GetComponent<PawnCircleGraphic>();
+            _statToggleButton = buttonObject.GetComponent<Button>();
+            _statToggleButton.targetGraphic = _statToggleGraphic;
+
+            var labelObject = new GameObject(
+                "Label",
+                typeof(RectTransform),
+                typeof(CanvasRenderer),
+                typeof(Text));
+            var labelRect =
+                labelObject.GetComponent<RectTransform>();
+            labelRect.SetParent(rect, false);
+            labelRect.anchorMin = Vector2.zero;
+            labelRect.anchorMax = Vector2.one;
+            labelRect.offsetMin = Vector2.zero;
+            labelRect.offsetMax = Vector2.zero;
+
+            var label = labelObject.GetComponent<Text>();
+            label.font =
+                _movementText != null ? _movementText.font : null;
+            label.fontSize = 13;
+            label.fontStyle = FontStyle.Bold;
+            label.color = Color.white;
+            label.alignment = TextAnchor.MiddleCenter;
+            label.text = "스탯";
+            label.raycastTarget = false;
+
+            buttonObject.SetActive(false);
+            RefreshStatToggleVisual();
+        }
+
+        private void BindStatToggleButton()
+        {
+            if (_statToggleButton == null)
+                return;
+
+            _statToggleButton.onClick.RemoveListener(
+                HandleStatToggleClicked);
+            _statToggleButton.onClick.AddListener(
+                HandleStatToggleClicked);
+        }
+
+        private void UnbindStatToggleButton()
+        {
+            if (_statToggleButton != null)
+            {
+                _statToggleButton.onClick.RemoveListener(
+                    HandleStatToggleClicked);
+            }
+        }
+
+        private void HandleStatToggleClicked()
+        {
+            _statPanel?.ToggleExpanded();
+        }
+
+        private void HandleStatPanelExpandedChanged(bool expanded)
+        {
+            RefreshStatToggleVisual();
+        }
+
+        private void RefreshStatToggleVisual()
+        {
+            if (_statToggleGraphic == null)
+                return;
+
+            _statToggleGraphic.color =
+                _statPanel != null && _statPanel.IsExpanded
+                    ? new Color(0.08f, 0.48f, 0.60f, 0.99f)
+                    : new Color(0.07f, 0.20f, 0.24f, 0.98f);
         }
 
         private void SetInteraction(bool enabled)

@@ -43,7 +43,8 @@ namespace Trpg.Domain.Stats
         Defense,
         Initiative,
         LuckCurrent,
-        LuckMax
+        LuckMax,
+        Dexterity
     }
 
     public interface IStatLookupBand
@@ -88,6 +89,12 @@ namespace Trpg.Domain.Stats
         string Id { get; }
         IStatRuleTemplate RuleTemplate { get; }
         IReadOnlyList<StatBaseValue> BaseValues { get; }
+    }
+
+    public interface IStatValueProvider
+    {
+        bool TryGetNumber(string statId, out double value);
+        bool TryGetRoleNumber(StatRole role, out double value);
     }
 
     [Serializable]
@@ -766,7 +773,8 @@ namespace Trpg.Domain.Stats
 {
     public sealed class StatRuntimeState
     {
-        private const string DirectEditModifierSource = "__gm_direct_edit__";
+        public const string DirectEditModifierSourceId =
+            "__gm_direct_edit__";
 
         private readonly ICharacterStatDefinition _character;
         private readonly IStatRuleTemplate _template;
@@ -926,6 +934,25 @@ namespace Trpg.Domain.Stats
             return total;
         }
 
+        public double GetModifierAmount(
+            string statId,
+            string sourceId)
+        {
+            if (string.IsNullOrWhiteSpace(statId) ||
+                string.IsNullOrWhiteSpace(sourceId) ||
+                !_modifiers.TryGetValue(
+                    statId,
+                    out var statModifiers) ||
+                !statModifiers.TryGetValue(
+                    sourceId,
+                    out var amount))
+            {
+                return 0d;
+            }
+
+            return amount;
+        }
+
         public StatRuntimeSnapshot CreateSnapshot()
         {
             var snapshot = new StatRuntimeSnapshot
@@ -1057,7 +1084,9 @@ namespace Trpg.Domain.Stats
             var baseValue = GetBaseValue(definition.Id);
             var otherModifiers = GetModifierTotal(definition.Id);
             if (_modifiers.TryGetValue(definition.Id, out var statModifiers) &&
-                statModifiers.TryGetValue(DirectEditModifierSource, out var previousDirectEdit))
+                statModifiers.TryGetValue(
+                    DirectEditModifierSourceId,
+                    out var previousDirectEdit))
                 otherModifiers -= previousDirectEdit;
 
             var clampedValue = Math.Max(
@@ -1069,7 +1098,7 @@ namespace Trpg.Domain.Stats
             {
                 if (statModifiers != null)
                 {
-                    statModifiers.Remove(DirectEditModifierSource);
+                    statModifiers.Remove(DirectEditModifierSourceId);
                     if (statModifiers.Count == 0)
                         _modifiers.Remove(definition.Id);
                 }
@@ -1078,7 +1107,7 @@ namespace Trpg.Domain.Stats
 
             AddModifierSilently(
                 definition.Id,
-                DirectEditModifierSource,
+                DirectEditModifierSourceId,
                 directEditAmount);
         }
 

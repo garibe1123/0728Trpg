@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Trpg.Domain.Stats;
 using UnityEngine;
 namespace Trpg.Pawns
 {
@@ -210,6 +211,40 @@ namespace Trpg.Pawns
             }
             RefreshReachableArea();
         }
+
+        public void RefreshMovementBudgetFromStats(
+            InteractivePawn pawn,
+            bool preserveSpentDistance = true)
+        {
+            if (pawn == null ||
+                !_states.TryGetValue(pawn, out var state))
+            {
+                return;
+            }
+
+            var maximum = GetMaximumMoveMeters(pawn);
+            var spent = Mathf.Max(
+                0f,
+                state.MaximumMeters - state.RemainingMeters);
+            var remaining = preserveSpentDistance
+                ? QuantizeRemainingDistance(maximum - spent)
+                : maximum;
+            var refreshedState = new PawnMovementState(
+                state.Position,
+                remaining,
+                maximum);
+            _states[pawn] = refreshedState;
+
+            MovementBudgetChanged?.Invoke(
+                pawn,
+                refreshedState.RemainingMeters,
+                refreshedState.MaximumMeters);
+
+            if (pawn == _selectedMover)
+            {
+                RefreshReachableArea();
+            }
+        }
         public float GetRemainingMoveMeters(InteractivePawn pawn)
         {
             return pawn != null && _states.TryGetValue(pawn, out var state)
@@ -307,12 +342,73 @@ namespace Trpg.Pawns
         }
         private float GetMaximumMoveMeters(InteractivePawn pawn)
         {
-            var movementScore =
-                pawn.Definition != null
-                    ? pawn.Definition.MovementScore
-                    : _settings.DefaultMovementScore;
+            var definition = pawn.Definition;
+            var movementScore = definition != null
+                ? definition.MovementScore
+                : _settings.DefaultMovementScore;
+
+            if (definition != null &&
+                TryGetStatProvider(pawn, out var statProvider))
+            {
+                movementScore = definition.ResolveMovementScore(
+                    statProvider,
+                    movementScore);
+            }
+
             return QuantizeDistance(
                 _settings.GetTurnMoveMeters(movementScore));
+        }
+
+        private static bool TryGetStatProvider(
+            InteractivePawn pawn,
+            out IStatValueProvider provider)
+        {
+            provider = null;
+            if (pawn == null)
+            {
+                return false;
+            }
+
+            var components =
+                pawn.GetComponents<MonoBehaviour>();
+            for (var index = 0;
+                 index < components.Length;
+                 index++)
+            {
+                if (components[index] is IStatValueProvider candidate)
+                {
+                    provider = candidate;
+                    return true;
+                }
+            }
+
+            components =
+                pawn.GetComponentsInChildren<MonoBehaviour>(true);
+            for (var index = 0;
+                 index < components.Length;
+                 index++)
+            {
+                if (components[index] is IStatValueProvider candidate)
+                {
+                    provider = candidate;
+                    return true;
+                }
+            }
+
+            components =
+                pawn.GetComponentsInParent<MonoBehaviour>(true);
+            for (var index = 0;
+                 index < components.Length;
+                 index++)
+            {
+                if (components[index] is IStatValueProvider candidate)
+                {
+                    provider = candidate;
+                    return true;
+                }
+            }
+
+            return false;
         }
         private Vector2 SnapIfEnabled(Vector2 position)
         {
