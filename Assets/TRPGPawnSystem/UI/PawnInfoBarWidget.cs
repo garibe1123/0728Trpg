@@ -833,8 +833,38 @@ namespace Trpg.Pawns
         private void HandleQuickCheckRequested()
         {
             _statPanel?.SetExpanded(false);
-            CheckRollRequested?.Invoke(
-                default(PawnCheckRollRequest));
+            OpenCheckRollInput();
+        }
+
+        private void OpenCheckRollInput()
+        {
+            EnsureRollWidget();
+            if (_rollWidget == null)
+            {
+                Debug.LogWarning(
+                    $"[{name}] 판정 굴림 UI를 찾지 못했습니다.",
+                    this);
+                return;
+            }
+
+            CacheRollActionButtons();
+            var checkButton = _checkRollButtonRect != null
+                ? _checkRollButtonRect.GetComponent<Button>()
+                : null;
+            if (checkButton == null)
+            {
+                Debug.LogWarning(
+                    $"[{name}] 판정 굴림 버튼을 찾지 못했습니다.",
+                    this);
+                return;
+            }
+
+            if (!checkButton.IsActive() || !checkButton.interactable)
+            {
+                return;
+            }
+
+            checkButton.onClick.Invoke();
         }
 
         private void EnsureResourceBar()

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Trpg.Domain.Dice;
 using Trpg.Domain.Skills;
 using Trpg.Domain.Stats;
 using Trpg.UI.Skills;
@@ -44,6 +45,15 @@ namespace Trpg.Pawns
             "비어 있으면 같은 GameObject에 자동으로 추가합니다.")]
         private CampaignSaveManager _campaignSaveManager;
 
+        [Header("Check History")]
+        [SerializeField, Range(32, 1024), Tooltip(
+            "세션에 유지하고 저장할 최근 판정 기록 수")]
+        private int _checkHistoryCapacity = 256;
+
+        [SerializeField, Tooltip(
+            "비어 있으면 우측 상단 로그 UI를 런타임에 자동 생성")]
+        private SessionLogWidget _sessionLog;
+
         [Header("Roll Result Colors")]
         [SerializeField] private Color _criticalColor =
             new Color(0.20f, 0.95f, 0.38f);
@@ -56,6 +66,7 @@ namespace Trpg.Pawns
             new Color(1f, 0.78f, 0.22f);
 
         private PawnRollService _rollService;
+        private CoCCheckHistoryService _checkHistory;
         private PlayerStatState _boundStatState;
         private InteractivePawn _playerHudPawn;
         private PlayerStatState _playerHudStatState;
@@ -76,6 +87,14 @@ namespace Trpg.Pawns
             if (_infoBar == null)
             {
                 _infoBar = PawnInfoBarWidget.CreateRuntime(_settings);
+            }
+
+            _checkHistory = new CoCCheckHistoryService(
+                Mathf.Max(1, _checkHistoryCapacity));
+            if (_sessionLog == null)
+            {
+                _sessionLog = SessionLogWidget.CreateRuntime(
+                    _settings.ReferenceResolution);
             }
 
             EnsureCampaignSaveManager();
@@ -120,10 +139,19 @@ namespace Trpg.Pawns
                 HandlePlayerSkillRemoveRequested;
             _infoBar.PlayerHudRequested +=
                 HandlePlayerHudRequested;
+            _checkHistory.Changed += HandleCheckHistoryChanged;
+            _sessionLog.PushRequested += HandlePushRequested;
+            _sessionLog.OpposedRequested +=
+                HandleOpposedRequested;
+            _sessionLog.LuckSpendRequested +=
+                HandleLuckSpendRequested;
+            _sessionLog.SelectionChanged +=
+                HandleLogSelectionChanged;
             EnsurePlayerHudState(
                 _pawnManager.SelectedInteractive);
             HandleInteractiveSelectionChanged(
                 _pawnManager.SelectedInteractive);
+            HandleCheckHistoryChanged();
         }
 
         private void OnDisable()
@@ -166,6 +194,22 @@ namespace Trpg.Pawns
                 _infoBar.ClearStats();
             }
 
+            if (_checkHistory != null)
+            {
+                _checkHistory.Changed -= HandleCheckHistoryChanged;
+            }
+
+            if (_sessionLog != null)
+            {
+                _sessionLog.PushRequested -= HandlePushRequested;
+                _sessionLog.OpposedRequested -=
+                    HandleOpposedRequested;
+                _sessionLog.LuckSpendRequested -=
+                    HandleLuckSpendRequested;
+                _sessionLog.SelectionChanged -=
+                    HandleLogSelectionChanged;
+            }
+
             _isRollInProgress = false;
             BindStatState(null);
             BindPlayerHudState(null, null);
@@ -192,7 +236,9 @@ namespace Trpg.Pawns
                     gameObject.AddComponent<CampaignSaveManager>();
             }
 
-            _campaignSaveManager.Configure(_pawnManager);
+            _campaignSaveManager.Configure(
+                _pawnManager,
+                _checkHistory);
         }
 
         private void HandlePlayerHudRequested()
@@ -217,6 +263,7 @@ namespace Trpg.Pawns
                 _infoBar.Unbind();
                 RefreshPlayerStatPanel();
                 RefreshRollButtons(null);
+                RefreshLogActionAvailability();
                 return;
             }
 
@@ -261,6 +308,7 @@ namespace Trpg.Pawns
             RefreshMovementBudget(pawn);
             RefreshMovementModeState(pawn);
             RefreshRollButtons(pawn);
+            RefreshLogActionAvailability();
         }
 
         private void HandleMoveRequested()
@@ -361,17 +409,30 @@ namespace Trpg.Pawns
                 return;
             }
 
-            var target = ResolveCheckTarget(pawn);
+            ResolveCheckContext(
+                pawn,
+                out var statId,
+                out var statName,
+                out var target,
+                out var isLuckCheck);
             var result = _rollService.RollD100(target);
+            var record = _checkHistory.AddStandard(
+                pawn.InstanceId,
+                ResolvePawnDisplayName(pawn),
+                statId,
+                statName,
+                target,
+                result.Roll,
+                isLuckCheck);
             var presentation = new PawnRollPresentationData(
                 "판정 굴림",
-                $"d100 / 목표 {target}",
-                result.Roll,
+                $"{statName} / 목표 {target}",
+                record.FinalRoll,
                 1,
                 100,
-                GetCheckResultLabel(result.Grade),
-                $"굴림 {result.Roll} / 목표 {target}",
-                GetCheckResultColor(result.Grade),
+                GetCheckResultLabel(record.Outcome),
+                $"굴림 {record.FinalRoll} / 목표 {target}",
+                GetCheckResultColor(record.Outcome),
                 1.55f);
             _infoBar.PlayRoll(presentation);
         }
@@ -406,6 +467,7 @@ namespace Trpg.Pawns
             _infoBar.SetRollButtonsEnabled(
                 _pawnManager.SelectedInteractive != null &&
                 _pawnManager.SelectedInteractive.Definition != null);
+            RefreshLogActionAvailability();
         }
 
         private bool TryBeginRoll(out InteractivePawn pawn)
@@ -423,65 +485,607 @@ namespace Trpg.Pawns
             return true;
         }
 
-        private int ResolveCheckTarget(InteractivePawn pawn)
+        private bool TryBeginLinkedRoll(InteractivePawn pawn)
         {
-            var statState = ResolvePawnStatState(pawn);
-            if (statState != null &&
-                TryResolveRuleCheckTarget(
-                    statState,
-                    out var ruleTarget))
-            {
-                return ruleTarget;
-            }
-
-            if (pawn != null &&
-                pawn.TryGetComponent<PawnRollStats>(out var stats))
-            {
-                return stats.GetCheckTarget(_checkStatId);
-            }
-
-            return DefaultCheckTarget;
-        }
-
-        private bool TryResolveRuleCheckTarget(
-            PlayerStatState statState,
-            out int target)
-        {
-            target = DefaultCheckTarget;
-            if (statState == null ||
-                !statState.IsInitialized)
+            if (_isRollInProgress ||
+                pawn == null ||
+                pawn.Definition == null)
             {
                 return false;
             }
 
-            var statId = _checkStatId;
-            if (string.IsNullOrWhiteSpace(statId) ||
-                string.Equals(
+            _isRollInProgress = true;
+            _infoBar.SetRollButtonsEnabled(false);
+            RefreshLogActionAvailability();
+            return true;
+        }
+
+        private void HandlePushRequested(string sourceRecordId)
+        {
+            if (!_checkHistory.TryGetRecord(
+                    sourceRecordId,
+                    out var source))
+            {
+                _sessionLog.SetStatus(
+                    "강행할 판정 기록을 찾지 못했습니다.",
+                    true);
+                return;
+            }
+
+            var pawn = FindPawnByInstanceId(source.PawnId);
+            if (pawn == null)
+            {
+                _sessionLog.SetStatus(
+                    "강행 판정의 Pawn을 씬에서 찾지 못했습니다.",
+                    true);
+                return;
+            }
+
+            if (!TryBeginLinkedRoll(pawn))
+            {
+                _sessionLog.SetStatus(
+                    "다른 굴림 연출이 끝난 뒤 다시 시도해 주세요.",
+                    true);
+                return;
+            }
+
+            var roll = _rollService.RollD100(source.Target).Roll;
+            if (!_checkHistory.TryAddPushed(
+                    sourceRecordId,
+                    roll,
+                    out var pushed,
+                    out var error))
+            {
+                _isRollInProgress = false;
+                RefreshRollButtons(
+                    _pawnManager.SelectedInteractive);
+                _sessionLog.SetStatus(error, true);
+                return;
+            }
+
+            _sessionLog.SetStatus(
+                $"#{source.Sequence} 판정에 강행을 연결했습니다.",
+                false);
+            _infoBar.PlayRoll(
+                CreateCheckPresentation(
+                    "강행 판정",
+                    pushed,
+                    1.55f));
+        }
+
+        private void HandleOpposedRequested(string sourceRecordId)
+        {
+            if (!_checkHistory.TryGetRecord(
+                    sourceRecordId,
+                    out var source))
+            {
+                _sessionLog.SetStatus(
+                    "대항할 원본 판정 기록을 찾지 못했습니다.",
+                    true);
+                return;
+            }
+
+            var opponentPawn = _pawnManager.SelectedInteractive;
+            if (opponentPawn == null ||
+                opponentPawn.Definition == null)
+            {
+                _sessionLog.SetStatus(
+                    "대항할 Pawn을 먼저 선택해 주세요.",
+                    true);
+                return;
+            }
+
+            ResolveCheckContext(
+                opponentPawn,
+                out var statId,
+                out var statName,
+                out var target,
+                out var isLuckCheck);
+            if (!TryBeginLinkedRoll(opponentPawn))
+            {
+                _sessionLog.SetStatus(
+                    "다른 굴림 연출이 끝난 뒤 다시 시도해 주세요.",
+                    true);
+                return;
+            }
+
+            var roll = _rollService.RollD100(target).Roll;
+            if (!_checkHistory.TryAddOpposed(
+                    sourceRecordId,
+                    opponentPawn.InstanceId,
+                    ResolvePawnDisplayName(opponentPawn),
                     statId,
+                    statName,
+                    target,
+                    roll,
+                    isLuckCheck,
+                    out var opponent,
+                    out var error))
+            {
+                _isRollInProgress = false;
+                RefreshRollButtons(
+                    _pawnManager.SelectedInteractive);
+                _sessionLog.SetStatus(error, true);
+                return;
+            }
+
+            _sessionLog.SetStatus(
+                $"#{source.Sequence} 판정과 대항 판정을 연결했습니다.",
+                false);
+            _infoBar.PlayRoll(
+                CreateCheckPresentation(
+                    "대항 판정",
+                    opponent,
+                    1.55f));
+        }
+
+        private void HandleLuckSpendRequested(
+            string recordId,
+            int amount)
+        {
+            if (_isRollInProgress)
+            {
+                _sessionLog.SetStatus(
+                    "굴림 연출이 끝난 뒤 Luck을 적용해 주세요.",
+                    true);
+                return;
+            }
+
+            if (!_checkHistory.TryGetRecord(
+                    recordId,
+                    out var record))
+            {
+                _sessionLog.SetStatus(
+                    "Luck을 적용할 판정 기록을 찾지 못했습니다.",
+                    true);
+                return;
+            }
+
+            var pawn = FindPawnByInstanceId(record.PawnId);
+            if (!TryGetPawnLuck(
+                    pawn,
+                    out var luckBefore,
+                    out var error))
+            {
+                _sessionLog.SetStatus(error, true);
+                return;
+            }
+
+            if (!_checkHistory.TryPreviewLuckSpend(
+                    recordId,
+                    amount,
+                    luckBefore,
+                    out var changedRoll,
+                    out var changedOutcome,
+                    out error))
+            {
+                _sessionLog.SetStatus(error, true);
+                return;
+            }
+
+            if (!TrySetPawnLuck(
+                    pawn,
+                    luckBefore - amount,
+                    out error))
+            {
+                _sessionLog.SetStatus(error, true);
+                return;
+            }
+
+            var luckAfter = luckBefore - amount;
+            if (!_checkHistory.TryCommitLuckSpend(
+                    recordId,
+                    amount,
+                    luckBefore,
+                    luckAfter,
+                    changedRoll,
+                    changedOutcome,
+                    out error))
+            {
+                TrySetPawnLuck(pawn, luckBefore, out _);
+                _sessionLog.SetStatus(error, true);
+                return;
+            }
+
+            RefreshSelectedResourceBar();
+            RefreshPlayerStatPanel();
+            _sessionLog.SetStatus(
+                $"#{record.Sequence}에 Luck {amount}을 소비했습니다. " +
+                $"({luckBefore} → {luckAfter})",
+                false);
+
+            _isRollInProgress = true;
+            _infoBar.SetRollButtonsEnabled(false);
+            _infoBar.PlayRoll(
+                CreateCheckPresentation(
+                    "Luck 적용",
+                    record,
+                    1.05f));
+        }
+
+        private void HandleCheckHistoryChanged()
+        {
+            if (_sessionLog == null || _checkHistory == null)
+            {
+                return;
+            }
+
+            _sessionLog.Bind(_checkHistory.Records);
+            RefreshLogActionAvailability();
+        }
+
+        private void HandleLogSelectionChanged(string recordId)
+        {
+            RefreshLogActionAvailability();
+        }
+
+        private void RefreshLogActionAvailability()
+        {
+            if (_sessionLog == null || _checkHistory == null ||
+                !_checkHistory.TryGetRecord(
+                    _sessionLog.SelectedRecordId,
+                    out var record))
+            {
+                _sessionLog?.SetActionAvailability(
+                    false,
+                    false,
+                    false,
+                    0);
+                return;
+            }
+
+            var sourcePawn = FindPawnByInstanceId(record.PawnId);
+            var selectedPawn = _pawnManager != null
+                ? _pawnManager.SelectedInteractive
+                : null;
+            var canPush =
+                !_isRollInProgress &&
+                sourcePawn != null &&
+                record.Kind != CoCCheckKind.Pushed &&
+                !record.IsLuckCheck &&
+                string.IsNullOrWhiteSpace(record.PushedRecordId) &&
+                string.IsNullOrWhiteSpace(record.OpposedRecordId) &&
+                CoCCheckRules.CanPush(record.Outcome);
+            var canOppose =
+                !_isRollInProgress &&
+                selectedPawn != null &&
+                !string.Equals(
+                    selectedPawn.InstanceId,
+                    record.PawnId,
+                    StringComparison.Ordinal) &&
+                string.IsNullOrWhiteSpace(record.OpposedRecordId);
+
+            var canSpendLuck = false;
+            var availableLuck = 0;
+            if (!_isRollInProgress &&
+                sourcePawn != null &&
+                !record.IsLuckCheck &&
+                record.FinalRoll > 1 &&
+                record.Outcome != CoCCheckOutcome.Fumble &&
+                record.Outcome !=
+                    CoCCheckOutcome.CriticalSuccess)
+            {
+                canSpendLuck = TryGetPawnLuck(
+                    sourcePawn,
+                    out availableLuck,
+                    out _) &&
+                    availableLuck > 0;
+            }
+
+            var suggested = _checkHistory.GetSuggestedLuckSpend(
+                record.Id);
+            if (suggested > availableLuck)
+            {
+                suggested = 0;
+            }
+
+            _sessionLog.SetActionAvailability(
+                canPush,
+                canOppose,
+                canSpendLuck,
+                suggested);
+        }
+
+        private PawnRollPresentationData CreateCheckPresentation(
+            string title,
+            CoCCheckRecord record,
+            float duration)
+        {
+            var detail =
+                $"굴림 {record.FinalRoll} / 목표 {record.Target}";
+            if (record.LuckSpent > 0)
+            {
+                detail += $" / Luck -{record.LuckSpent}";
+            }
+
+            if (record.OpposedResult != CoCOpposedResult.None)
+            {
+                detail +=
+                    $" / 대항 {GetOpposedResultLabel(record.OpposedResult)}";
+            }
+
+            return new PawnRollPresentationData(
+                title,
+                $"{record.StatName} / 목표 {record.Target}",
+                record.FinalRoll,
+                1,
+                100,
+                GetCheckResultLabel(record.Outcome),
+                detail,
+                GetCheckResultColor(record.Outcome),
+                duration);
+        }
+
+        private void ResolveCheckContext(
+            InteractivePawn pawn,
+            out string statId,
+            out string statName,
+            out int target,
+            out bool isLuckCheck)
+        {
+            statId = string.IsNullOrWhiteSpace(_checkStatId)
+                ? PawnRollStats.DefaultStatId
+                : _checkStatId.Trim();
+            statName = statId;
+            target = DefaultCheckTarget;
+            isLuckCheck = false;
+
+            var statState = ResolvePawnStatState(pawn);
+            if (statState != null && statState.IsInitialized)
+            {
+                var luckStatId =
+                    statState.Runtime.Template.GetStatId(
+                        StatRole.LuckCurrent);
+                var luckMaximumStatId =
+                    statState.Runtime.Template.GetStatId(
+                        StatRole.LuckMax);
+                if (string.Equals(
+                        statId,
+                        PawnRollStats.DefaultStatId,
+                        StringComparison.Ordinal))
+                {
+                    statId = statState.Runtime.Template.GetStatId(
+                        StatRole.Dexterity);
+                }
+
+                if (string.IsNullOrWhiteSpace(statId))
+                {
+                    statId = FindFirstBaseStatId(
+                        statState.Runtime.Template);
+                }
+
+                if (!string.IsNullOrWhiteSpace(luckStatId) &&
+                    (string.Equals(
+                         statId,
+                         luckMaximumStatId,
+                         StringComparison.Ordinal) ||
+                     statId.IndexOf(
+                         "luck",
+                         StringComparison.OrdinalIgnoreCase) >= 0))
+                {
+                    statId = luckStatId;
+                }
+
+                if (!string.IsNullOrWhiteSpace(statId) &&
+                    statState.TryGetNumber(statId, out var value))
+                {
+                    target = Mathf.Clamp(
+                        Mathf.RoundToInt((float)value),
+                        MinimumCheckTarget,
+                        MaximumCheckTarget);
+                    if (statState.Runtime.TryGetDefinition(
+                            statId,
+                            out var definition) &&
+                        definition != null &&
+                        !string.IsNullOrWhiteSpace(
+                            definition.DisplayName))
+                    {
+                        statName = definition.DisplayName;
+                    }
+                }
+
+                isLuckCheck =
+                    !string.IsNullOrWhiteSpace(luckStatId) &&
+                    string.Equals(
+                        statId,
+                        luckStatId,
+                        StringComparison.Ordinal);
+            }
+            else if (pawn != null &&
+                     pawn.TryGetComponent<PawnRollStats>(
+                         out var stats))
+            {
+                target = stats.GetCheckTarget(statId);
+            }
+
+            if (string.IsNullOrWhiteSpace(statName) ||
+                string.Equals(
+                    statName,
                     PawnRollStats.DefaultStatId,
                     StringComparison.Ordinal))
             {
-                statId = statState.Runtime.Template.GetStatId(
-                    StatRole.Dexterity);
+                statName = "기본 판정";
             }
 
-            if (string.IsNullOrWhiteSpace(statId))
-            {
-                statId = FindFirstBaseStatId(
-                    statState.Runtime.Template);
-            }
+            isLuckCheck =
+                isLuckCheck ||
+                statId.IndexOf(
+                    "luck",
+                    StringComparison.OrdinalIgnoreCase) >= 0;
+        }
 
-            if (string.IsNullOrWhiteSpace(statId) ||
-                !statState.TryGetNumber(statId, out var value))
+        private bool TryGetPawnLuck(
+            InteractivePawn pawn,
+            out int luck,
+            out string error)
+        {
+            luck = 0;
+            if (pawn == null)
             {
+                error = "Luck을 보유한 Pawn을 찾지 못했습니다.";
                 return false;
             }
 
-            target = Mathf.Clamp(
-                Mathf.RoundToInt((float)value),
-                MinimumCheckTarget,
-                MaximumCheckTarget);
-            return true;
+            var statState = ResolvePawnStatState(pawn);
+            if (statState != null && statState.IsInitialized)
+            {
+                var luckStatId =
+                    statState.Runtime.Template.GetStatId(
+                        StatRole.LuckCurrent);
+                if (!string.IsNullOrWhiteSpace(luckStatId) &&
+                    statState.TryGetNumber(
+                        luckStatId,
+                        out var value))
+                {
+                    luck = Mathf.Max(
+                        0,
+                        Mathf.FloorToInt((float)value));
+                    error = string.Empty;
+                    return true;
+                }
+            }
+
+            var sheet = pawn.GetComponent<CoCCharacterSheet>();
+            if (sheet == null)
+            {
+                sheet = pawn.GetComponentInChildren<
+                    CoCCharacterSheet>();
+            }
+
+            if (sheet != null && sheet.IsInitialized)
+            {
+                luck = sheet.CurrentLuck;
+                error = string.Empty;
+                return true;
+            }
+
+            error = "이 Pawn에서 현재 Luck 스탯을 찾지 못했습니다.";
+            return false;
+        }
+
+        private bool TrySetPawnLuck(
+            InteractivePawn pawn,
+            int value,
+            out string error)
+        {
+            if (pawn == null)
+            {
+                error = "Luck을 변경할 Pawn을 찾지 못했습니다.";
+                return false;
+            }
+
+            var statState = ResolvePawnStatState(pawn);
+            if (statState != null && statState.IsInitialized)
+            {
+                var luckStatId =
+                    statState.Runtime.Template.GetStatId(
+                        StatRole.LuckCurrent);
+                if (!string.IsNullOrWhiteSpace(luckStatId) &&
+                    (statState.TrySetRuntimeValue(
+                         luckStatId,
+                         value) ||
+                     statState.TrySetDisplayedValue(
+                         luckStatId,
+                         value)))
+                {
+                    error = string.Empty;
+                    return true;
+                }
+            }
+
+            var sheet = pawn.GetComponent<CoCCharacterSheet>();
+            if (sheet == null)
+            {
+                sheet = pawn.GetComponentInChildren<
+                    CoCCharacterSheet>();
+            }
+
+            if (sheet != null && sheet.IsInitialized)
+            {
+                sheet.SetLuck(value);
+                error = string.Empty;
+                return true;
+            }
+
+            error = "Luck 스탯이 런타임 변경을 허용하지 않습니다.";
+            return false;
+        }
+
+        private InteractivePawn FindPawnByInstanceId(string pawnId)
+        {
+            if (_pawnManager == null ||
+                string.IsNullOrWhiteSpace(pawnId))
+            {
+                return null;
+            }
+
+            var found = FindPawnByInstanceId(
+                _pawnManager.PlayerPawns,
+                pawnId);
+            if (found != null)
+            {
+                return found;
+            }
+
+            found = FindPawnByInstanceId(
+                _pawnManager.MonsterPawns,
+                pawnId);
+            return found != null
+                ? found
+                : FindPawnByInstanceId(
+                    _pawnManager.NpcPawns,
+                    pawnId);
+        }
+
+        private static InteractivePawn FindPawnByInstanceId(
+            IReadOnlyList<InteractivePawn> pawns,
+            string pawnId)
+        {
+            if (pawns == null)
+            {
+                return null;
+            }
+
+            for (var index = 0; index < pawns.Count; index++)
+            {
+                var pawn = pawns[index];
+                if (pawn != null &&
+                    string.Equals(
+                        pawn.InstanceId,
+                        pawnId,
+                        StringComparison.Ordinal))
+                {
+                    return pawn;
+                }
+            }
+
+            return null;
+        }
+
+        private static string ResolvePawnDisplayName(
+            InteractivePawn pawn)
+        {
+            if (pawn == null)
+            {
+                return string.Empty;
+            }
+
+            return pawn.Definition != null &&
+                   !string.IsNullOrWhiteSpace(
+                       pawn.Definition.DisplayName)
+                ? pawn.Definition.DisplayName
+                : pawn.name;
+        }
+
+        private int ResolveCheckTarget(InteractivePawn pawn)
+        {
+            ResolveCheckContext(
+                pawn,
+                out _,
+                out _,
+                out var target,
+                out _);
+            return target;
         }
 
         private static string FindFirstBaseStatId(
@@ -1192,39 +1796,60 @@ namespace Trpg.Pawns
                 $"효과 굴림\n{effectExpression}");
         }
 
-        private Color GetCheckResultColor(CheckRollGrade grade)
+        private Color GetCheckResultColor(CoCCheckOutcome outcome)
         {
-            switch (grade)
+            switch (outcome)
             {
-                case CheckRollGrade.Critical:
+                case CoCCheckOutcome.CriticalSuccess:
                     return _criticalColor;
-                case CheckRollGrade.Fumble:
+                case CoCCheckOutcome.Fumble:
                     return _fumbleColor;
-                case CheckRollGrade.ExtremeSuccess:
-                case CheckRollGrade.HardSuccess:
-                case CheckRollGrade.Success:
+                case CoCCheckOutcome.ExtremeSuccess:
+                case CoCCheckOutcome.HardSuccess:
+                case CoCCheckOutcome.Success:
                     return _successColor;
                 default:
                     return _failureColor;
             }
         }
 
-        private static string GetCheckResultLabel(CheckRollGrade grade)
+        private static string GetCheckResultLabel(
+            CoCCheckOutcome outcome)
         {
-            switch (grade)
+            switch (outcome)
             {
-                case CheckRollGrade.Critical:
+                case CoCCheckOutcome.CriticalSuccess:
                     return "대성공";
-                case CheckRollGrade.ExtremeSuccess:
+                case CoCCheckOutcome.ExtremeSuccess:
                     return "극단적 성공";
-                case CheckRollGrade.HardSuccess:
+                case CoCCheckOutcome.HardSuccess:
                     return "어려운 성공";
-                case CheckRollGrade.Success:
+                case CoCCheckOutcome.Success:
                     return "성공";
-                case CheckRollGrade.Fumble:
+                case CoCCheckOutcome.Fumble:
                     return "대실패";
-                default:
+                case CoCCheckOutcome.Failure:
                     return "실패";
+                default:
+                    return "무효";
+            }
+        }
+
+        private static string GetOpposedResultLabel(
+            CoCOpposedResult result)
+        {
+            switch (result)
+            {
+                case CoCOpposedResult.Win:
+                    return "승리";
+                case CoCOpposedResult.Lose:
+                    return "패배";
+                case CoCOpposedResult.Draw:
+                    return "동률";
+                case CoCOpposedResult.NoWinner:
+                    return "승자 없음";
+                default:
+                    return "-";
             }
         }
 
@@ -1243,6 +1868,11 @@ namespace Trpg.Pawns
             {
                 _checkStatId = PawnRollStats.DefaultStatId;
             }
+
+            _checkHistoryCapacity = Mathf.Clamp(
+                _checkHistoryCapacity,
+                32,
+                1024);
         }
 #endif
     }

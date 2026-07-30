@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Trpg.Domain.Dice;
 using Trpg.Save;
 using Trpg.UI.Skills;
 using Trpg.UI.Stats;
@@ -17,13 +18,18 @@ namespace Trpg.Pawns
         [SerializeField] private SystemMenuWidget _menu;
 
         private CampaignSaveService _saveService;
+        private CoCCheckHistoryService _checkHistory;
         private InputAction _escapeAction;
         private bool _isInitialized;
 
-        public void Configure(PawnManager pawnManager)
+        public void Configure(
+            PawnManager pawnManager,
+            CoCCheckHistoryService checkHistory = null)
         {
             if (pawnManager != null)
                 _pawnManager = pawnManager;
+            if (checkHistory != null)
+                _checkHistory = checkHistory;
 
             TryInitialize();
         }
@@ -223,7 +229,10 @@ namespace Trpg.Pawns
         {
             var snapshot = new CampaignSnapshot
             {
-                AppVersion = Application.version
+                AppVersion = Application.version,
+                CheckHistory = _checkHistory != null
+                    ? _checkHistory.CreateSnapshot()
+                    : new CoCCheckHistorySnapshot()
             };
             var pawns = CollectCharacterPawns();
             for (var index = 0; index < pawns.Count; index++)
@@ -359,6 +368,15 @@ namespace Trpg.Pawns
                     0f,
                     0f,
                     stored.RotationZ);
+            }
+
+            if (_checkHistory != null &&
+                !_checkHistory.TryRestore(
+                    snapshot.CheckHistory,
+                    out error))
+            {
+                error = "판정 기록 복원 실패: " + error;
+                return false;
             }
 
             return true;

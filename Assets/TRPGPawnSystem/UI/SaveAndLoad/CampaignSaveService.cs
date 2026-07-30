@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using Trpg.Domain.Dice;
 using Trpg.Domain.Stats;
 using Trpg.UI.Skills;
 using UnityEngine;
@@ -18,6 +19,8 @@ namespace Trpg.Save
         public string SaveName;
         public string SavedAtUtc;
         public List<PawnSnapshot> Pawns = new List<PawnSnapshot>();
+        public CoCCheckHistorySnapshot CheckHistory =
+            new CoCCheckHistorySnapshot();
     }
 
     [Serializable]
@@ -52,7 +55,7 @@ namespace Trpg.Save
 
     public sealed class CampaignSaveService
     {
-        public const int CurrentSchemaVersion = 1;
+        public const int CurrentSchemaVersion = 2;
         private const int MaximumSaveNameLength = 40;
         private const string SaveExtension = ".json";
 
