@@ -17,12 +17,35 @@ MonoBehaviour:
   _moveableKind: 0
   _displayName: Player01
   _description: Player01
-  _portrait: {fileID: 0}
+  _portrait: {fileID: 21300000, guid: 444810ca896903c41adf617b35274dc4, type: 3}
   _legacyMoveMeters: 0
   _legacyMoveMetersPerTurn: 0
   _movementScore: 40
-  _characterStats: {fileID: 11400000, guid: d6c435ba9debaec4ca78f509e1c5ed67, type: 2}
+  _statRuleTemplate: {fileID: 0}
+  _baseStats:
+  - _statId: coc.str
+    _value: 50
+  - _statId: coc.con
+    _value: 50
+  - _statId: coc.siz
+    _value: 50
+  - _statId: coc.dex
+    _value: 50
+  - _statId: coc.app
+    _value: 50
+  - _statId: coc.int
+    _value: 50
+  - _statId: coc.pow
+    _value: 50
+  - _statId: coc.edu
+    _value: 50
+  - _statId: coc.luck
+    _value: 50
+  - _statId: coc.cthulhu_mythos
+    _value: 0
   _movementStatToScoreMultiplier: 5
+  _skillCatalog: {fileID: 0}
+  _skills: []
   _presentationMetersPerSecond: 6
   _presentationDurationSeconds: 0.5
   _presentationHopHeight: 0.2

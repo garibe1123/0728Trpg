@@ -11,10 +11,17 @@ namespace Trpg.Pawns
         private const float PathEpsilon = 0.001f;
         [SerializeField] private PawnSystemSettings _settings;
         [SerializeField] private PawnNavMeshManager _navMeshManager;
+
+        [SerializeField, Min(0f), Tooltip(
+            "다른 InteractivePawn Collider 외곽에서 목적지로 지정할 수 없는 거리(m)")]
+        private float _interactiveDestinationClearanceMeters = 0.25f;
         private readonly List<InteractivePawn> _interactivePawns =
             new List<InteractivePawn>();
         private readonly Dictionary<InteractivePawn, PawnMovementState> _states =
             new Dictionary<InteractivePawn, PawnMovementState>();
+        private readonly Dictionary<InteractivePawn, Collider2D[]>
+            _interactiveColliders =
+                new Dictionary<InteractivePawn, Collider2D[]>();
         private readonly HashSet<InteractivePawn> _presentingMovers =
             new HashSet<InteractivePawn>();
         private InteractivePawn _selectedMover;
@@ -44,6 +51,8 @@ namespace Trpg.Pawns
                     continue;
                 }
                 _interactivePawns.Add(pawn);
+                _interactiveColliders[pawn] =
+                    pawn.GetComponentsInChildren<Collider2D>(true);
                 pawn.MovementPresentationCompleted +=
                     HandleMovementPresentationCompleted;
                 if (pawn.IsMoveable)
@@ -87,6 +96,7 @@ namespace Trpg.Pawns
             HideReachableArea();
             HidePathPreview();
             _interactivePawns.Clear();
+            _interactiveColliders.Clear();
             _states.Clear();
             _presentingMovers.Clear();
             _selectedMover = null;
@@ -116,12 +126,12 @@ namespace Trpg.Pawns
                 return;
             }
             var destination = SnapIfEnabled(requestedPosition);
-            if (!_navMeshManager.TryCalculatePath(
+            if (!TryResolveValidPath(
                     state.Position,
                     destination,
-                    _settings.MaxProjectionMeters,
                     out var corners,
-                    out var distance) ||
+                    out var distance,
+                    out _) ||
                 corners.Length < 2)
             {
                 PathPreviewChanged?.Invoke(
@@ -151,12 +161,12 @@ namespace Trpg.Pawns
                 return false;
             }
             var destination = SnapIfEnabled(requestedPosition);
-            if (!_navMeshManager.TryCalculatePath(
+            if (!TryResolveValidPath(
                     state.Position,
                     destination,
-                    _settings.MaxProjectionMeters,
                     out var corners,
-                    out var length) ||
+                    out var length,
+                    out var projectedDestination) ||
                 length <= PathEpsilon)
             {
                 return false;
@@ -166,9 +176,6 @@ namespace Trpg.Pawns
             {
                 return false;
             }
-            var projectedDestination = new Vector2(
-                corners[corners.Length - 1].x,
-                corners[corners.Length - 1].y);
             state.Position = projectedDestination;
             state.RemainingMeters = QuantizeRemainingDistance(
                 state.RemainingMeters - moveCost);
@@ -410,6 +417,93 @@ namespace Trpg.Pawns
 
             return false;
         }
+        private bool TryResolveValidPath(
+            Vector2 origin,
+            Vector2 requestedDestination,
+            out Vector3[] corners,
+            out float pathLength,
+            out Vector2 projectedDestination)
+        {
+            corners = Array.Empty<Vector3>();
+            pathLength = 0f;
+            projectedDestination = default;
+
+            if (!_navMeshManager.TryCalculatePath(
+                    origin,
+                    requestedDestination,
+                    _settings.MaxProjectionMeters,
+                    out corners,
+                    out pathLength) ||
+                corners == null ||
+                corners.Length == 0)
+            {
+                return false;
+            }
+
+            var finalCorner = corners[corners.Length - 1];
+            projectedDestination = new Vector2(
+                finalCorner.x,
+                finalCorner.y);
+
+            return !IsDestinationBlockedByInteractivePawn(
+                projectedDestination);
+        }
+
+        private bool IsDestinationBlockedByInteractivePawn(
+            Vector2 destination)
+        {
+            var clearance = Mathf.Max(
+                0f,
+                _interactiveDestinationClearanceMeters);
+
+            for (var pawnIndex = 0;
+                 pawnIndex < _interactivePawns.Count;
+                 pawnIndex++)
+            {
+                var pawn = _interactivePawns[pawnIndex];
+                if (pawn == null ||
+                    pawn == _selectedMover ||
+                    !pawn.gameObject.activeInHierarchy)
+                {
+                    continue;
+                }
+
+                if (!_interactiveColliders.TryGetValue(
+                        pawn,
+                        out var colliders) ||
+                    colliders == null)
+                {
+                    colliders =
+                        pawn.GetComponentsInChildren<Collider2D>(true);
+                    _interactiveColliders[pawn] = colliders;
+                }
+
+                for (var colliderIndex = 0;
+                     colliderIndex < colliders.Length;
+                     colliderIndex++)
+                {
+                    var collider = colliders[colliderIndex];
+                    if (collider == null ||
+                        !collider.enabled ||
+                        !collider.gameObject.activeInHierarchy)
+                    {
+                        continue;
+                    }
+
+                    var closest = collider.ClosestPoint(destination);
+                    var distance = Vector2.Distance(
+                        destination,
+                        closest);
+                    if (distance <= clearance + PathEpsilon)
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
         private Vector2 SnapIfEnabled(Vector2 position)
         {
             if (!_settings.SnapDestinationToMovementStep)
