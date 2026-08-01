@@ -252,6 +252,70 @@ namespace Trpg.Pawns
                 RefreshReachableArea();
             }
         }
+        public bool RestorePawnPosition(
+            InteractivePawn pawn,
+            Vector2 restoredPosition)
+        {
+            if (pawn == null)
+            {
+                return false;
+            }
+
+            _presentingMovers.Remove(pawn);
+            HidePathPreview();
+
+            if (pawn.IsMoveable)
+            {
+                if (_states.TryGetValue(pawn, out var state))
+                {
+                    var restoredState = new PawnMovementState(
+                        restoredPosition,
+                        state.RemainingMeters,
+                        state.MaximumMeters);
+                    _states[pawn] = restoredState;
+                    MovementBudgetChanged?.Invoke(
+                        pawn,
+                        restoredState.RemainingMeters,
+                        restoredState.MaximumMeters);
+                }
+                else
+                {
+                    var maximum = GetMaximumMoveMeters(pawn);
+                    var restoredState = new PawnMovementState(
+                        restoredPosition,
+                        maximum,
+                        maximum);
+                    _states[pawn] = restoredState;
+                    MovementBudgetChanged?.Invoke(
+                        pawn,
+                        restoredState.RemainingMeters,
+                        restoredState.MaximumMeters);
+                }
+            }
+
+            pawn.TeleportTo(restoredPosition);
+            if (pawn == _selectedMover)
+            {
+                RefreshReachableArea();
+            }
+
+            return true;
+        }
+
+        public bool TryGetMovementPosition(
+            InteractivePawn pawn,
+            out Vector2 position)
+        {
+            if (pawn != null && _states.TryGetValue(pawn, out var state))
+            {
+                position = state.Position;
+                return true;
+            }
+
+            position = pawn != null ? pawn.WorldPosition : default;
+            return pawn != null;
+        }
+
         public float GetRemainingMoveMeters(InteractivePawn pawn)
         {
             return pawn != null && _states.TryGetValue(pawn, out var state)
