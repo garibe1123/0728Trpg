@@ -3,39 +3,10 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Text;
-using Trpg.Domain.Dice;
-using Trpg.Domain.Stats;
-using Trpg.UI.Skills;
 using UnityEngine;
 
 namespace Trpg.Save
 {
-    [Serializable]
-    public sealed class CampaignSnapshot
-    {
-        public int SchemaVersion = CampaignSaveService.CurrentSchemaVersion;
-        public string AppVersion;
-        public string SaveId;
-        public string SaveName;
-        public string SavedAtUtc;
-        public List<PawnSnapshot> Pawns = new List<PawnSnapshot>();
-        public CoCCheckHistorySnapshot CheckHistory =
-            new CoCCheckHistorySnapshot();
-    }
-
-    [Serializable]
-    public sealed class PawnSnapshot
-    {
-        public string InstanceId;
-        public string DefinitionId;
-        public float PositionX;
-        public float PositionY;
-        public float PositionZ;
-        public float RotationZ;
-        public StatRuntimeSnapshot Stats;
-        public SkillRuntimeSnapshot Skills;
-    }
-
     public readonly struct SaveSlotInfo
     {
         public SaveSlotInfo(

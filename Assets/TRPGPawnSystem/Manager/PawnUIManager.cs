@@ -1,6 +1,10 @@
 using System;
 using System.Collections.Generic;
+using Trpg.Data.Handouts;
+using Trpg.Data.Inventory;
 using Trpg.Domain.Stats;
+using Trpg.UI.Handouts;
+using Trpg.UI.Inventory;
 using Trpg.UI.Skills;
 using Trpg.UI.Stats;
 using UnityEngine;
@@ -38,6 +42,22 @@ namespace Trpg.Pawns
             "비어 있으면 런타임에 하단 정보 바를 자동 생성")]
         private PawnInfoBarWidget _infoBar;
 
+        [Header("Inventory")]
+        [SerializeField, Tooltip("+ 버튼에서 선택할 공용 Item Definition 카탈로그")]
+        private ItemCatalogDefinition _itemCatalog;
+        [SerializeField, Tooltip("19종 아이템 종류별 슬롯 아이콘 세트")]
+        private InventoryIconSetDefinition _inventoryIconSet;
+        [SerializeField, Tooltip("가용 무게 계산에 사용할 스탯 ID")]
+        private string _inventoryCapacityStatId = "coc.str";
+        [SerializeField, Min(0f), Tooltip("가용 무게 = 스탯 × 배율")]
+        private float _inventoryCapacityMultiplier = 1f;
+        [SerializeField, Min(0f), Tooltip("스탯을 찾지 못했을 때 가용 무게")]
+        private float _inventoryFallbackCapacity;
+
+        [Header("Handouts")]
+        [SerializeField, Tooltip("시나리오에 미리 제작한 Handout Definition 카탈로그")]
+        private HandoutCatalogDefinition _handoutCatalog;
+
         [Header("Movement")]
         [FormerlySerializedAs("_moveButton")]
         [FormerlySerializedAs("_movementButton")]
@@ -61,23 +81,25 @@ namespace Trpg.Pawns
         private int _effectDiceModifier;
 
         [Header("Roll Result Colors")]
-        [SerializeField]
-        private Color _criticalColor =
+        [SerializeField] private Color _criticalColor =
             new Color(0.20f, 0.95f, 0.38f);
-        [SerializeField]
-        private Color _successColor =
+        [SerializeField] private Color _successColor =
             new Color(0.24f, 0.84f, 1f);
-        [SerializeField]
-        private Color _failureColor =
+        [SerializeField] private Color _failureColor =
             new Color(1f, 0.36f, 0.28f);
         [SerializeField] private Color _fumbleColor = Color.black;
-        [SerializeField]
-        private Color _effectColor =
+        [SerializeField] private Color _effectColor =
             new Color(1f, 0.78f, 0.22f);
 
         private PawnRollService _rollService;
         private PlayerStatState _boundStatState;
         private PlayerSkillState _boundSkillState;
+        private PlayerInventoryState _boundInventoryState;
+        private PawnInventoryWidget _inventoryWidget;
+        private PublicHandoutState _publicHandoutState;
+        private PublicHandoutWidget _handoutWidget;
+        private Button _handoutButton;
+        private RectTransform _handoutButtonRect;
         private string _boundDisplayName;
         private Sprite _boundPortrait;
         private bool _isRollInProgress;
@@ -101,6 +123,9 @@ namespace Trpg.Pawns
             var seed = unchecked(
                 Environment.TickCount * 397 ^ GetInstanceID());
             _rollService = new PawnRollService(seed);
+            _publicHandoutState = PublicHandoutState.ResolveOrCreate(
+                gameObject,
+                _handoutCatalog);
         }
 
         private void OnEnable()
@@ -135,7 +160,10 @@ namespace Trpg.Pawns
                 HandleSkillRegularEditRequested;
             _infoBar.PlayerSkillRemoveRequested +=
                 HandleSkillRemoveRequested;
+            _infoBar.InventoryRequested +=
+                HandleInventoryRequested;
 
+            BindHandoutSystem();
             BindWalkButton();
             HandleInteractiveSelectionChanged(
                 _pawnManager.SelectedInteractive);
@@ -173,18 +201,49 @@ namespace Trpg.Pawns
                     HandleSkillRegularEditRequested;
                 _infoBar.PlayerSkillRemoveRequested -=
                     HandleSkillRemoveRequested;
+                _infoBar.InventoryRequested -=
+                    HandleInventoryRequested;
                 _infoBar.Hide();
             }
 
             UnbindStatState();
             UnbindSkillState();
+            UnbindInventoryState();
+            _inventoryWidget?.Hide();
+            UnbindHandoutSystem();
+            _handoutWidget?.Hide();
+            if (_handoutButton != null)
+                _handoutButton.gameObject.SetActive(false);
             UnbindWalkButton();
             _isRollInProgress = false;
             PlayerStatState.SetActive(null);
         }
 
+        private void OnDestroy()
+        {
+            if (_inventoryWidget != null)
+            {
+                Destroy(_inventoryWidget.gameObject);
+                _inventoryWidget = null;
+            }
+
+            if (_handoutWidget != null)
+            {
+                Destroy(_handoutWidget.gameObject);
+                _handoutWidget = null;
+            }
+
+            if (_handoutButton != null)
+            {
+                Destroy(_handoutButton.gameObject);
+                _handoutButton = null;
+                _handoutButtonRect = null;
+            }
+        }
+
         private void HandleCloseRequested()
         {
+            _inventoryWidget?.Hide();
             _pawnManager.ClearSelection();
         }
 
@@ -193,6 +252,8 @@ namespace Trpg.Pawns
         {
             UnbindStatState();
             UnbindSkillState();
+            UnbindInventoryState();
+            _inventoryWidget?.Hide();
 
             if (pawn == null || pawn.Definition == null)
             {
@@ -235,6 +296,12 @@ namespace Trpg.Pawns
             {
                 _infoBar.ClearStats();
             }
+
+            BindInventoryState(
+                PlayerInventoryState.ResolveOrCreate(
+                    pawn.gameObject,
+                    definition,
+                    _itemCatalog));
 
             RefreshMovementBudget(pawn);
             RefreshWalkButton(pawn);
@@ -343,9 +410,44 @@ namespace Trpg.Pawns
             _boundSkillState = null;
         }
 
+        private void BindInventoryState(
+            PlayerInventoryState inventoryState)
+        {
+            if (inventoryState == null)
+                return;
+
+            if (!inventoryState.IsInitialized)
+                inventoryState.Initialize();
+            if (!inventoryState.IsInitialized)
+                return;
+
+            _boundInventoryState = inventoryState;
+            _boundInventoryState.Changed -=
+                HandleBoundInventoryStateChanged;
+            _boundInventoryState.Changed +=
+                HandleBoundInventoryStateChanged;
+        }
+
+        private void UnbindInventoryState()
+        {
+            if (_boundInventoryState != null)
+            {
+                _boundInventoryState.Changed -=
+                    HandleBoundInventoryStateChanged;
+            }
+
+            _boundInventoryState = null;
+        }
+
+        private void HandleBoundInventoryStateChanged()
+        {
+            RefreshInventoryUi();
+        }
+
         private void HandleBoundStatStateChanged()
         {
             RefreshStatUi();
+            RefreshInventoryUi();
         }
 
         private void HandleBoundSkillStateChanged()
@@ -432,6 +534,372 @@ namespace Trpg.Pawns
             {
                 RefreshStatUi();
             }
+        }
+
+        private void BindHandoutSystem()
+        {
+            if (_publicHandoutState == null)
+            {
+                _publicHandoutState = PublicHandoutState.ResolveOrCreate(
+                    gameObject,
+                    _handoutCatalog);
+            }
+            else
+            {
+                _publicHandoutState.Configure(_handoutCatalog);
+                _publicHandoutState.Initialize();
+            }
+
+            if (_publicHandoutState != null)
+            {
+                _publicHandoutState.Changed -=
+                    HandlePublicHandoutStateChanged;
+                _publicHandoutState.Changed +=
+                    HandlePublicHandoutStateChanged;
+            }
+
+            EnsureHandoutButton();
+            if (_handoutButton != null)
+            {
+                _handoutButton.onClick.RemoveListener(
+                    HandleHandoutButtonClicked);
+                _handoutButton.onClick.AddListener(
+                    HandleHandoutButtonClicked);
+                _handoutButton.gameObject.SetActive(true);
+            }
+            RefreshHandoutUi();
+        }
+
+        private void UnbindHandoutSystem()
+        {
+            if (_publicHandoutState != null)
+            {
+                _publicHandoutState.Changed -=
+                    HandlePublicHandoutStateChanged;
+            }
+
+            if (_handoutButton != null)
+            {
+                _handoutButton.onClick.RemoveListener(
+                    HandleHandoutButtonClicked);
+            }
+        }
+
+        private void HandlePublicHandoutStateChanged()
+        {
+            RefreshHandoutUi();
+        }
+
+        private void EnsureHandoutButton()
+        {
+            if (_handoutButton != null || _infoBar == null)
+                return;
+
+            var canvas = _infoBar.GetComponentInParent<Canvas>();
+            var rootCanvas = canvas != null ? canvas.rootCanvas : null;
+            if (rootCanvas == null)
+            {
+                Debug.LogError(
+                    $"[{name}] 핸드아웃 버튼을 생성할 Root Canvas를 " +
+                    "찾지 못했습니다.",
+                    this);
+                return;
+            }
+
+            var buttonObject = new GameObject(
+                "PublicHandoutButton",
+                typeof(RectTransform),
+                typeof(CanvasRenderer),
+                typeof(Image),
+                typeof(Button));
+            _handoutButtonRect =
+                buttonObject.GetComponent<RectTransform>();
+            _handoutButtonRect.SetParent(rootCanvas.transform, false);
+            _handoutButtonRect.anchorMin = new Vector2(1f, 0f);
+            _handoutButtonRect.anchorMax = new Vector2(1f, 0f);
+            _handoutButtonRect.pivot = new Vector2(1f, 0f);
+            _handoutButtonRect.anchoredPosition =
+                new Vector2(-24f, 24f);
+            _handoutButtonRect.sizeDelta = new Vector2(148f, 46f);
+
+            var image = buttonObject.GetComponent<Image>();
+            image.color = new Color(0.07f, 0.16f, 0.20f, 0.98f);
+            _handoutButton = buttonObject.GetComponent<Button>();
+            _handoutButton.targetGraphic = image;
+            _handoutButton.transition = Selectable.Transition.ColorTint;
+
+            var labelObject = new GameObject(
+                "Label",
+                typeof(RectTransform),
+                typeof(CanvasRenderer),
+                typeof(Text));
+            var labelRect = labelObject.GetComponent<RectTransform>();
+            labelRect.SetParent(_handoutButtonRect, false);
+            labelRect.anchorMin = Vector2.zero;
+            labelRect.anchorMax = Vector2.one;
+            labelRect.offsetMin = new Vector2(5f, 2f);
+            labelRect.offsetMax = new Vector2(-5f, -2f);
+
+            var label = labelObject.GetComponent<Text>();
+            var sourceText = _infoBar.GetComponentInChildren<Text>(true);
+            label.font = sourceText != null
+                ? sourceText.font
+                : Resources.GetBuiltinResource<Font>(
+                    "LegacyRuntime.ttf");
+            label.fontSize = 17;
+            label.alignment = TextAnchor.MiddleCenter;
+            label.color = Color.white;
+            label.text = "핸드아웃";
+            label.raycastTarget = false;
+            buttonObject.transform.SetAsLastSibling();
+        }
+
+        private void HandleHandoutButtonClicked()
+        {
+            if (_publicHandoutState == null)
+                return;
+
+            EnsureHandoutWidget();
+            if (_handoutWidget == null)
+                return;
+
+            if (_handoutWidget.IsVisible)
+            {
+                _handoutWidget.Hide();
+                return;
+            }
+
+            RefreshHandoutUi();
+            _handoutWidget.Show(_handoutButtonRect);
+        }
+
+        private void EnsureHandoutWidget()
+        {
+            if (_handoutWidget != null || _infoBar == null)
+                return;
+
+            var canvas = _infoBar.GetComponentInParent<Canvas>();
+            var rootCanvas = canvas != null ? canvas.rootCanvas : null;
+            if (rootCanvas == null)
+            {
+                Debug.LogError(
+                    $"[{name}] 핸드아웃 UI를 생성할 Root Canvas를 " +
+                    "찾지 못했습니다.",
+                    this);
+                return;
+            }
+
+            var text = _infoBar.GetComponentInChildren<Text>(true);
+            _handoutWidget = PublicHandoutWidget.CreateRuntime(
+                rootCanvas,
+                text != null ? text.font : null);
+            _handoutWidget.AddRequested +=
+                HandleHandoutAddRequested;
+            _handoutWidget.RemoveRequested +=
+                HandleHandoutRemoveRequested;
+            _handoutWidget.MoveRequested +=
+                HandleHandoutMoveRequested;
+            _handoutWidget.CloseRequested +=
+                HandleHandoutCloseRequested;
+        }
+
+        private void HandleHandoutAddRequested(
+            HandoutDefinition definition)
+        {
+            if (_publicHandoutState == null)
+                return;
+
+            if (!_publicHandoutState.TryAdd(
+                    definition,
+                    out var error))
+            {
+                Debug.LogWarning(
+                    $"[{name}] 핸드아웃을 공개하지 못했습니다. " +
+                    error,
+                    this);
+                RefreshHandoutUi();
+            }
+        }
+
+        private void HandleHandoutRemoveRequested(string definitionId)
+        {
+            if (_publicHandoutState == null ||
+                !_publicHandoutState.TryRemove(definitionId))
+            {
+                RefreshHandoutUi();
+            }
+        }
+
+        private void HandleHandoutMoveRequested(
+            string definitionId,
+            int targetIndex)
+        {
+            if (_publicHandoutState == null ||
+                !_publicHandoutState.TryMove(
+                    definitionId,
+                    targetIndex))
+            {
+                RefreshHandoutUi();
+            }
+        }
+
+        private void HandleHandoutCloseRequested()
+        {
+            _handoutWidget?.Hide();
+        }
+
+        private void RefreshHandoutUi()
+        {
+            if (_handoutWidget == null ||
+                _publicHandoutState == null)
+            {
+                return;
+            }
+
+            _handoutWidget.Bind(
+                _publicHandoutState.Handouts,
+                _handoutCatalog);
+        }
+
+        private void HandleInventoryRequested()
+        {
+            if (_boundInventoryState == null)
+                return;
+
+            EnsureInventoryWidget();
+            if (_inventoryWidget == null)
+                return;
+
+            if (_inventoryWidget.IsVisible)
+            {
+                _inventoryWidget.Hide();
+                return;
+            }
+
+            RefreshInventoryUi();
+            _inventoryWidget.Show(_infoBar.InventoryAnchorRect);
+        }
+
+        private void EnsureInventoryWidget()
+        {
+            if (_inventoryWidget != null || _infoBar == null)
+                return;
+
+            var canvas = _infoBar.GetComponentInParent<Canvas>();
+            var rootCanvas = canvas != null ? canvas.rootCanvas : null;
+            if (rootCanvas == null)
+            {
+                Debug.LogError(
+                    $"[{name}] 인벤토리를 생성할 Root Canvas를 찾지 못했습니다.",
+                    this);
+                return;
+            }
+
+            var text = _infoBar.GetComponentInChildren<Text>(true);
+            _inventoryWidget = PawnInventoryWidget.CreateRuntime(
+                rootCanvas,
+                text != null ? text.font : null);
+            _inventoryWidget.AddRequested +=
+                HandleInventoryAddRequested;
+            _inventoryWidget.RemoveRequested +=
+                HandleInventoryRemoveRequested;
+            _inventoryWidget.QuantityChangedRequested +=
+                HandleInventoryQuantityChangedRequested;
+            _inventoryWidget.MoveRequested +=
+                HandleInventoryMoveRequested;
+            _inventoryWidget.CloseRequested +=
+                HandleInventoryCloseRequested;
+        }
+
+        private void HandleInventoryAddRequested(
+            InventoryItemDraft draft)
+        {
+            if (_boundInventoryState == null)
+                return;
+
+            string error;
+            var succeeded = draft.Definition != null
+                ? _boundInventoryState.TryAdd(
+                    draft.Definition,
+                    draft.Quantity,
+                    out _,
+                    out error)
+                : _boundInventoryState.TryAddCustom(
+                    draft.Type,
+                    draft.DisplayName,
+                    draft.Quantity,
+                    draft.UnitWeight,
+                    out _,
+                    out error);
+
+            if (!succeeded)
+            {
+                Debug.LogWarning(
+                    $"[{name}] 아이템을 추가하지 못했습니다. {error}",
+                    _boundInventoryState);
+                RefreshInventoryUi();
+            }
+        }
+
+        private void HandleInventoryRemoveRequested(string runtimeId)
+        {
+            if (_boundInventoryState == null ||
+                !_boundInventoryState.TryRemove(runtimeId))
+            {
+                RefreshInventoryUi();
+            }
+        }
+
+        private void HandleInventoryQuantityChangedRequested(
+            string runtimeId,
+            int quantity)
+        {
+            if (_boundInventoryState == null ||
+                !_boundInventoryState.TrySetQuantity(
+                    runtimeId,
+                    quantity))
+            {
+                RefreshInventoryUi();
+            }
+        }
+
+        private void HandleInventoryMoveRequested(
+            string runtimeId,
+            int targetIndex)
+        {
+            if (_boundInventoryState == null ||
+                !_boundInventoryState.TryMove(
+                    runtimeId,
+                    targetIndex))
+            {
+                RefreshInventoryUi();
+            }
+        }
+
+        private void HandleInventoryCloseRequested()
+        {
+            _inventoryWidget?.Hide();
+        }
+
+        private void RefreshInventoryUi()
+        {
+            if (_inventoryWidget == null ||
+                _boundInventoryState == null)
+            {
+                return;
+            }
+
+            var capacity = _boundInventoryState.CalculateCapacity(
+                _boundStatState,
+                _inventoryCapacityStatId,
+                _inventoryCapacityMultiplier,
+                _inventoryFallbackCapacity);
+            _inventoryWidget.Bind(
+                _boundInventoryState.Items,
+                _boundInventoryState.CurrentWeight,
+                capacity,
+                _itemCatalog,
+                _inventoryIconSet);
         }
 
         private void RefreshStatUi()

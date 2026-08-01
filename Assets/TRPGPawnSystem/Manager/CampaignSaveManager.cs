@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Text;
 using Trpg.Domain.Dice;
 using Trpg.Save;
+using Trpg.UI.Handouts;
+using Trpg.UI.Inventory;
 using Trpg.UI.Skills;
 using Trpg.UI.Stats;
 using UnityEngine;
@@ -80,7 +82,9 @@ namespace Trpg.Pawns
             public int PositionRestoredCount;
             public int StatRestoredCount;
             public int SkillRestoredCount;
+            public int InventoryRestoredCount;
             public bool CheckHistoryRestored;
+            public bool HandoutsRestored;
         }
 
         private CampaignSaveService _saveService;
@@ -608,12 +612,17 @@ namespace Trpg.Pawns
             if (!TryCollectPawnRecords(out var records, out error))
                 return false;
 
+            var handoutState = PublicHandoutState.ResolveOrCreate(
+                _pawnManager.gameObject);
             snapshot = new CampaignSnapshot
             {
                 AppVersion = Application.version,
                 CheckHistory = _checkHistory != null
                     ? _checkHistory.CreateSnapshot()
-                    : new CoCCheckHistorySnapshot()
+                    : new CoCCheckHistorySnapshot(),
+                PublicHandouts = handoutState != null
+                    ? handoutState.CreateSnapshot()
+                    : new PublicHandoutSnapshot()
             };
 
             for (var index = 0; index < records.Count; index++)
@@ -660,6 +669,11 @@ namespace Trpg.Pawns
             var skillState = ResolveSkillState(pawn);
             stored.Skills = skillState != null
                 ? skillState.CreateSnapshot()
+                : null;
+
+            var inventoryState = ResolveInventoryState(pawn);
+            stored.Inventory = inventoryState != null
+                ? inventoryState.CreateSnapshot()
                 : null;
 
             return stored;
@@ -902,6 +916,14 @@ namespace Trpg.Pawns
                         snapshot.CheckHistory);
             }
 
+            if (!plan.HasMeaningfulDifference && current != null)
+            {
+                plan.HasMeaningfulDifference =
+                    !AreJsonSnapshotsEquivalent(
+                        current.PublicHandouts,
+                        snapshot.PublicHandouts);
+            }
+
             return true;
         }
 
@@ -951,7 +973,78 @@ namespace Trpg.Pawns
                 }
             }
 
+            TryRestorePublicHandouts(
+                plan.Snapshot.PublicHandouts,
+                rollback != null ? rollback.PublicHandouts : null,
+                result);
+
             return result;
+        }
+
+        private void TryRestorePublicHandouts(
+            PublicHandoutSnapshot target,
+            PublicHandoutSnapshot rollback,
+            LoadResult result)
+        {
+            if (target == null)
+                return;
+
+            var state = PublicHandoutState.ResolveOrCreate(
+                _pawnManager != null ? _pawnManager.gameObject : gameObject);
+            if (state == null)
+            {
+                AddLoadIssue(
+                    result.Issues,
+                    "LOAD-802",
+                    string.Empty,
+                    "공용 핸드아웃 상태를 준비하지 못해 기존 목록을 " +
+                    "유지합니다.");
+                return;
+            }
+
+            if (state.TryApplySnapshot(
+                    target,
+                    out var missingDefinitionIds,
+                    out var applyError))
+            {
+                result.HandoutsRestored = true;
+                for (var index = 0;
+                     index < missingDefinitionIds.Count;
+                     index++)
+                {
+                    AddLoadIssue(
+                        result.Issues,
+                        "LOAD-801",
+                        string.Empty,
+                        "Handout Definition을 찾지 못해 번호와 설명만 " +
+                        "복원했습니다. Id=" +
+                        missingDefinitionIds[index]);
+                }
+                return;
+            }
+
+            AddLoadIssue(
+                result.Issues,
+                "LOAD-802",
+                string.Empty,
+                "공용 핸드아웃을 복원하지 못해 기존 목록을 " +
+                "유지합니다. " + applyError);
+
+            if (rollback == null)
+                return;
+
+            if (!state.TryApplySnapshot(
+                    rollback,
+                    out _,
+                    out var rollbackError))
+            {
+                AddLoadIssue(
+                    result.Issues,
+                    "LOAD-809",
+                    string.Empty,
+                    "공용 핸드아웃 롤백에도 실패했습니다. " +
+                    rollbackError);
+            }
         }
 
         private void ApplyPawnBinding(
@@ -994,6 +1087,8 @@ namespace Trpg.Pawns
                 requestedAreaCount++;
             if (stored.Skills != null)
                 requestedAreaCount++;
+            if (stored.Inventory != null)
+                requestedAreaCount++;
 
             var restoredAreaCount = 0;
             var pawnHasIssue = false;
@@ -1024,6 +1119,23 @@ namespace Trpg.Pawns
                         result.Issues))
                 {
                     result.SkillRestoredCount++;
+                    restoredAreaCount++;
+                }
+                else
+                {
+                    pawnHasIssue = true;
+                }
+            }
+
+            if (stored.Inventory != null)
+            {
+                if (TryRestoreInventory(
+                        pawn,
+                        stored.Inventory,
+                        before != null ? before.Inventory : null,
+                        result.Issues))
+                {
+                    result.InventoryRestoredCount++;
                     restoredAreaCount++;
                 }
                 else
@@ -1145,6 +1257,48 @@ namespace Trpg.Pawns
                     "LOAD-409",
                     pawn.name,
                     "스킬 적용 실패 후 기존 스킬 복원에도 " +
+                    "실패했습니다. " + restoreError);
+            }
+
+            return false;
+        }
+
+        private static bool TryRestoreInventory(
+            InteractivePawn pawn,
+            InventoryRuntimeSnapshot target,
+            InventoryRuntimeSnapshot rollback,
+            ICollection<LoadIssue> issues)
+        {
+            var state = ResolveInventoryState(pawn);
+            if (state == null)
+            {
+                AddLoadIssue(
+                    issues,
+                    "LOAD-701",
+                    pawn.name,
+                    "PlayerInventoryState를 준비하지 못해 인벤토리를 " +
+                    "건너뜁니다.");
+                return false;
+            }
+
+            if (state.TryApplySnapshot(target, out var applyError))
+                return true;
+
+            AddLoadIssue(
+                issues,
+                "LOAD-702",
+                pawn.name,
+                "인벤토리 Snapshot 적용에 실패해 기존 인벤토리를 " +
+                "유지합니다. " + applyError);
+
+            if (rollback != null &&
+                !state.TryApplySnapshot(rollback, out var restoreError))
+            {
+                AddLoadIssue(
+                    issues,
+                    "LOAD-709",
+                    pawn.name,
+                    "인벤토리 적용 실패 후 기존 인벤토리 복원에도 " +
                     "실패했습니다. " + restoreError);
             }
 
@@ -1439,7 +1593,13 @@ namespace Trpg.Pawns
                 .Append(" · 스탯 ")
                 .Append(result.StatRestoredCount)
                 .Append(" · 스킬 ")
-                .AppendLine(result.SkillRestoredCount.ToString());
+                .Append(result.SkillRestoredCount)
+                .Append(" · 인벤토리 ")
+                .AppendLine(result.InventoryRestoredCount.ToString());
+            builder.Append("공용 핸드아웃 ")
+                .AppendLine(result.HandoutsRestored
+                    ? "복원"
+                    : "유지");
 
             if (result.Issues.Count > 0)
             {
@@ -1750,7 +1910,10 @@ namespace Trpg.Pawns
                        target.Stats) &&
                    AreJsonSnapshotsEquivalent(
                        current.Skills,
-                       target.Skills);
+                       target.Skills) &&
+                   AreJsonSnapshotsEquivalent(
+                       current.Inventory,
+                       target.Inventory);
         }
 
         private static bool AreJsonSnapshotsEquivalent(
@@ -1775,6 +1938,17 @@ namespace Trpg.Pawns
                 return null;
 
             return PlayerSkillState.ResolveOrCreate(
+                pawn.gameObject,
+                pawn.Definition);
+        }
+
+        private static PlayerInventoryState ResolveInventoryState(
+            InteractivePawn pawn)
+        {
+            if (pawn == null || pawn.Definition == null)
+                return null;
+
+            return PlayerInventoryState.ResolveOrCreate(
                 pawn.gameObject,
                 pawn.Definition);
         }

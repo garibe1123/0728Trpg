@@ -31,11 +31,13 @@ namespace Trpg.Pawns
         private const float CompactPanelMaximumWidth = 1320f;
         private const float CompactPanelSideMargin = 24f;
         private const float CompactPanelMinimumHeight = 196f;
-        private const float PortraitLayoutSize = 160f;
+        private const float PortraitLayoutSize = 150f;
         private const float PortraitLayoutLeft = 20f;
-        private const float ResourceLayoutLeft = 204f;
+        private const float InventoryButtonSize = 48f;
+        private const float InventoryButtonGap = 10f;
+        private const float ResourceLayoutLeft = 240f;
         private const float ResourceLayoutBottom = 18f;
-        private const float ResourceLayoutWidth = 414f;
+        private const float ResourceLayoutWidth = 378f;
         private const float ResourceLayoutHeight = 138f;
         private const float ActionButtonWidth = 164f;
         private const float ActionButtonHeight = 72f;
@@ -82,6 +84,8 @@ namespace Trpg.Pawns
         private float _remainingMovementMeters;
         private float _maximumMovementMeters;
         private Image _moveButtonImage;
+        private Button _inventoryButton;
+        private RectTransform _inventoryButtonRect;
         private bool _isApplyingCompactLayout;
         private bool _hasCompactLayout;
         private float _hiddenPadding;
@@ -106,6 +110,16 @@ namespace Trpg.Pawns
         public event Action<PawnSkillRemoveRequest>
             PlayerSkillRemoveRequested;
         public event Action PlayerHudRequested;
+        public event Action InventoryRequested;
+
+        public RectTransform InventoryAnchorRect
+        {
+            get
+            {
+                EnsureInventoryButton();
+                return _inventoryButtonRect;
+            }
+        }
 
         public static PawnInfoBarWidget CreateRuntime(
             PawnSystemSettings settings)
@@ -118,6 +132,9 @@ namespace Trpg.Pawns
             _descriptionText.text = data.Description;
             _portraitImage.sprite = data.Portrait;
             _portraitImage.enabled = data.Portrait != null;
+            EnsureInventoryButton();
+            BindInventoryButton();
+            SetInventoryButtonEnabled(true);
             _movementScore = data.MovementScore;
             _hasMovementBudget = false;
             EnsureMoveButton();
@@ -131,6 +148,7 @@ namespace Trpg.Pawns
         }
         public void Unbind()
         {
+            SetInventoryButtonEnabled(false);
             Hide();
             _nameText.text = string.Empty;
             _descriptionText.text = string.Empty;
@@ -402,6 +420,9 @@ namespace Trpg.Pawns
             ClearBoardOverlay();
             EnsureMoveButton();
             BindMoveButton();
+            EnsureInventoryButton();
+            BindInventoryButton();
+            SetInventoryButtonEnabled(false);
             BindCloseButton();
             EnsureActionGroup();
             EnsureRollWidget();
@@ -445,6 +466,8 @@ namespace Trpg.Pawns
             EnsureBoardOverlay();
             EnsureMoveButton();
             BindMoveButton();
+            EnsureInventoryButton();
+            BindInventoryButton();
             BindCloseButton();
             EnsureActionGroup();
             EnsureRollWidget();
@@ -469,6 +492,7 @@ namespace Trpg.Pawns
         private void OnDisable()
         {
             UnbindMoveButton();
+            UnbindInventoryButton();
             UnbindCloseButton();
             UnbindRollWidget();
             UnbindResourceBar();
@@ -483,6 +507,7 @@ namespace Trpg.Pawns
         private void OnDestroy()
         {
             UnbindMoveButton();
+            UnbindInventoryButton();
             UnbindCloseButton();
             UnbindRollWidget();
             UnbindResourceBar();
@@ -509,6 +534,121 @@ namespace Trpg.Pawns
             PlayerSkillRegularEditRequested = null;
             PlayerSkillRemoveRequested = null;
             PlayerHudRequested = null;
+            InventoryRequested = null;
+        }
+
+        private void EnsureInventoryButton()
+        {
+            if (_inventoryButton != null || _panel == null)
+                return;
+
+            if (_portraitImage != null)
+            {
+                _portraitImage.raycastTarget = false;
+                var oldPortraitButton =
+                    _portraitImage.GetComponent<Button>();
+                if (oldPortraitButton != null)
+                {
+                    oldPortraitButton.onClick.RemoveAllListeners();
+                    oldPortraitButton.interactable = false;
+                }
+            }
+
+            var buttonObject = new GameObject(
+                "InventoryButton",
+                typeof(RectTransform),
+                typeof(CanvasRenderer),
+                typeof(Image),
+                typeof(Button));
+            _inventoryButtonRect =
+                buttonObject.GetComponent<RectTransform>();
+            _inventoryButtonRect.SetParent(_panel, false);
+
+            var image = buttonObject.GetComponent<Image>();
+            image.color = new Color(0.08f, 0.22f, 0.28f, 0.98f);
+
+            _inventoryButton = buttonObject.GetComponent<Button>();
+            _inventoryButton.targetGraphic = image;
+            _inventoryButton.transition = Selectable.Transition.ColorTint;
+
+            var labelObject = new GameObject(
+                "Label",
+                typeof(RectTransform),
+                typeof(CanvasRenderer),
+                typeof(Text));
+            var labelRect = labelObject.GetComponent<RectTransform>();
+            labelRect.SetParent(_inventoryButtonRect, false);
+            labelRect.anchorMin = Vector2.zero;
+            labelRect.anchorMax = Vector2.one;
+            labelRect.offsetMin = new Vector2(3f, 2f);
+            labelRect.offsetMax = new Vector2(-3f, -2f);
+
+            var label = labelObject.GetComponent<Text>();
+            label.font = _nameText != null && _nameText.font != null
+                ? _nameText.font
+                : Resources.GetBuiltinResource<Font>(
+                    "LegacyRuntime.ttf");
+            label.fontSize = 14;
+            label.fontStyle = FontStyle.Bold;
+            label.alignment = TextAnchor.MiddleCenter;
+            label.color = new Color(0.90f, 0.95f, 0.97f, 1f);
+            label.text = "가방";
+            label.raycastTarget = false;
+
+            ApplyInventoryButtonLayout();
+        }
+
+        private void BindInventoryButton()
+        {
+            if (_inventoryButton == null)
+                return;
+
+            _inventoryButton.onClick.RemoveListener(
+                HandleInventoryClicked);
+            _inventoryButton.onClick.AddListener(
+                HandleInventoryClicked);
+        }
+
+        private void UnbindInventoryButton()
+        {
+            if (_inventoryButton != null)
+            {
+                _inventoryButton.onClick.RemoveListener(
+                    HandleInventoryClicked);
+            }
+        }
+
+        private void SetInventoryButtonEnabled(bool enabled)
+        {
+            EnsureInventoryButton();
+            if (_inventoryButton == null)
+                return;
+
+            _inventoryButton.interactable = enabled;
+            _inventoryButton.gameObject.SetActive(enabled);
+        }
+
+        private void HandleInventoryClicked()
+        {
+            InventoryRequested?.Invoke();
+        }
+
+        private void ApplyInventoryButtonLayout()
+        {
+            if (_inventoryButtonRect == null)
+                return;
+
+            _inventoryButtonRect.anchorMin = new Vector2(0f, 0.5f);
+            _inventoryButtonRect.anchorMax = new Vector2(0f, 0.5f);
+            _inventoryButtonRect.pivot = new Vector2(0f, 0.5f);
+            _inventoryButtonRect.anchoredPosition = new Vector2(
+                PortraitLayoutLeft +
+                PortraitLayoutSize +
+                InventoryButtonGap,
+                0f);
+            _inventoryButtonRect.sizeDelta = new Vector2(
+                InventoryButtonSize,
+                58f);
         }
 
         private void HandleCloseClicked()
@@ -960,6 +1100,9 @@ namespace Trpg.Pawns
                 portraitRect.sizeDelta =
                     Vector2.one * PortraitLayoutSize;
             }
+
+            EnsureInventoryButton();
+            ApplyInventoryButtonLayout();
 
             if (_nameText != null)
             {
