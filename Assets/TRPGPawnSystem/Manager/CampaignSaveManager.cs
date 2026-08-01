@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 using Trpg.Domain.Dice;
 using Trpg.Save;
 using Trpg.UI.Skills;
@@ -40,14 +41,57 @@ namespace Trpg.Pawns
             public PawnSaveRecord Current;
         }
 
+        private sealed class LoadIssue
+        {
+            public string Code;
+            public string PawnName;
+            public string Message;
+
+            public override string ToString()
+            {
+                var target = string.IsNullOrWhiteSpace(PawnName)
+                    ? string.Empty
+                    : $" {PawnName}";
+                return $"[{Code}]{target} {Message}";
+            }
+        }
+
+        private sealed class LoadPlan
+        {
+            public CampaignSnapshot Snapshot;
+            public readonly List<PawnLoadBinding> Bindings =
+                new List<PawnLoadBinding>();
+            public readonly List<LoadIssue> Issues =
+                new List<LoadIssue>();
+            public bool HasMeaningfulDifference;
+            public int StoredPawnCount;
+            public int CurrentPawnCount;
+        }
+
+        private sealed class LoadResult
+        {
+            public readonly List<LoadIssue> Issues =
+                new List<LoadIssue>();
+            public int TotalStoredPawnCount;
+            public int BoundPawnCount;
+            public int FullyRestoredPawnCount;
+            public int PartiallyRestoredPawnCount;
+            public int SkippedPawnCount;
+            public int PositionRestoredCount;
+            public int StatRestoredCount;
+            public int SkillRestoredCount;
+            public bool CheckHistoryRestored;
+        }
+
         private CampaignSaveService _saveService;
         private CoCCheckHistoryService _checkHistory;
         private InputAction _escapeAction;
         private GameObject _ownedRuntimeMenuRoot;
         private GameObject _loadConfirmationRoot;
+        private Text _loadConfirmationBodyText;
         private Button _loadConfirmationAcceptButton;
         private Button _loadConfirmationCancelButton;
-        private CampaignSnapshot _pendingLoadSnapshot;
+        private LoadPlan _pendingLoadPlan;
         private CampaignSnapshot _pendingRollbackSnapshot;
         private bool _isInitialized;
         private bool _initializationErrorLogged;
@@ -199,7 +243,7 @@ namespace Trpg.Pawns
                 Destroy(_loadConfirmationRoot);
                 _loadConfirmationRoot = null;
             }
-            _pendingLoadSnapshot = null;
+            _pendingLoadPlan = null;
             _pendingRollbackSnapshot = null;
 
             if (_ownedRuntimeMenuRoot != null)
@@ -394,110 +438,111 @@ namespace Trpg.Pawns
                     out var snapshot,
                     out var error))
             {
-                _menu.SetStatus(error, true);
+                _menu.SetStatus(
+                    "[LOAD-101] 저장 파일을 읽지 못했습니다. " + error,
+                    true);
                 return;
             }
 
             if (!TryCaptureSnapshot(out var rollback, out error))
             {
                 _menu.SetStatus(
-                    "현재 상태를 비교하지 못해 불러오기를 중단했습니다. " +
-                    error,
+                    "[LOAD-105] 현재 상태를 백업하지 못해 " +
+                    "불러오기를 중단했습니다. " + error,
                     true);
                 return;
             }
 
-            if (!TryHasMeaningfulDifference(
-                    rollback,
+            if (!TryBuildLoadPlan(
                     snapshot,
-                    out var hasDifference,
+                    rollback,
+                    out var plan,
                     out error))
             {
-                _menu.SetStatus(
-                    "불러올 데이터를 현재 씬과 연결하지 못했습니다. " +
-                    error,
-                    true);
+                _menu.SetStatus(error, true);
                 return;
             }
 
-            if (hasDifference)
+            if (plan.HasMeaningfulDifference)
             {
-                ShowLoadConfirmation(snapshot, rollback);
+                ShowLoadConfirmation(plan, rollback);
                 return;
             }
 
-            ExecuteLoad(snapshot, rollback);
+            ExecuteLoad(plan, rollback);
         }
 
         private void ExecuteLoad(
-            CampaignSnapshot snapshot,
+            LoadPlan plan,
             CampaignSnapshot rollback)
         {
             HideLoadConfirmation();
 
-            if (!TryApplySnapshot(snapshot, out var error))
+            if (plan == null || plan.Snapshot == null)
             {
-                Debug.LogError(
-                    "저장 데이터 불러오기에 실패했습니다. " + error,
-                    this);
-
-                var rollbackSucceeded =
-                    TryApplySnapshot(rollback, out var rollbackError);
-                if (!rollbackSucceeded)
-                {
-                    Debug.LogError(
-                        "불러오기 실패 후 현재 상태 복원에도 " +
-                        "실패했습니다. " + rollbackError,
-                        this);
-                }
-
                 _menu.SetStatus(
-                    rollbackSucceeded
-                        ? "불러오기에 실패했습니다. 현재 상태는 " +
-                          "이전 상태로 복원되었습니다. " + error
-                        : "불러오기와 이전 상태 복원에 모두 실패했습니다. " +
-                          "불러오기 오류: " + error +
-                          " / 복원 오류: " + rollbackError,
+                    "[LOAD-102] 불러오기 계획 또는 Snapshot이 없습니다.",
                     true);
                 return;
             }
 
-            _menu.SetStatus("불러왔습니다.", false);
+            var result = ApplyLoadPlan(plan, rollback);
+            var hasIssues = result.Issues.Count > 0;
+            var message = BuildLoadResultMessage(result);
+            LogLoadIssues(result.Issues);
+            _menu.SetStatus(message, hasIssues);
         }
 
         private void ShowLoadConfirmation(
-            CampaignSnapshot snapshot,
+            LoadPlan plan,
             CampaignSnapshot rollback)
         {
             EnsureLoadConfirmation();
             if (_loadConfirmationRoot == null)
             {
                 _menu.SetStatus(
-                    "불러오기 확인창을 만들지 못했습니다.",
+                    "[LOAD-106] 불러오기 확인창을 만들지 못했습니다.",
                     true);
                 return;
             }
 
-            _pendingLoadSnapshot = snapshot;
+            _pendingLoadPlan = plan;
             _pendingRollbackSnapshot = rollback;
+
+            if (_loadConfirmationBodyText != null)
+                _loadConfirmationBodyText.text =
+                    BuildLoadConfirmationMessage(plan);
+
+            if (_loadConfirmationAcceptButton != null)
+            {
+                var label = _loadConfirmationAcceptButton
+                    .GetComponentInChildren<Text>(true);
+                if (label != null)
+                {
+                    label.text = plan.Issues.Count > 0
+                        ? "확인된 항목 불러오기"
+                        : "불러오기";
+                }
+            }
+
             _loadConfirmationRoot.SetActive(true);
             _loadConfirmationRoot.transform.SetAsLastSibling();
         }
 
         private void HandleLoadConfirmationAccepted()
         {
-            var snapshot = _pendingLoadSnapshot;
+            var plan = _pendingLoadPlan;
             var rollback = _pendingRollbackSnapshot;
-            if (snapshot == null || rollback == null)
+            if (plan == null || rollback == null)
             {
                 HideLoadConfirmation();
                 _menu.SetStatus(
-                    "불러오기 대기 데이터가 사라졌습니다.",
+                    "[LOAD-107] 불러오기 대기 데이터가 사라졌습니다.",
                     true);
                 return;
             }
 
-            ExecuteLoad(snapshot, rollback);
+            ExecuteLoad(plan, rollback);
         }
 
         private void HandleLoadConfirmationCancelled()
@@ -620,235 +665,38 @@ namespace Trpg.Pawns
             return stored;
         }
 
-        private bool TryApplySnapshot(
+        private bool TryBuildLoadPlan(
             CampaignSnapshot snapshot,
-            out string error)
-        {
-            error = string.Empty;
-            if (!TryBuildLoadBindings(
-                    snapshot,
-                    out var bindings,
-                    out error))
-            {
-                return false;
-            }
-
-            if (!TryPrepareStatStates(
-                    bindings,
-                    out var statStates,
-                    out error))
-            {
-                Debug.LogError(error, this);
-                return false;
-            }
-
-            _pawnManager.ClearSelection();
-            var movementManager = _pawnManager.MovementManager;
-
-            for (var index = 0; index < bindings.Count; index++)
-            {
-                var binding = bindings[index];
-                var stored = binding.Stored;
-                var pawn = binding.Current.Pawn;
-
-                if (stored.Stats != null)
-                {
-                    if (!statStates.TryGetValue(
-                            pawn,
-                            out var statState))
-                    {
-                        error =
-                            $"[{pawn.name}] 스탯 복원 실패: " +
-                            "사전 검증된 PlayerStatState를 찾지 못했습니다.";
-                        Debug.LogError(error, pawn);
-                        return false;
-                    }
-
-                    if (!statState.TryApplySnapshot(
-                            stored.Stats,
-                            out var statError))
-                    {
-                        error =
-                            $"[{pawn.name}] 스탯 복원 실패: " +
-                            statError;
-                        Debug.LogError(error, pawn);
-                        return false;
-                    }
-                }
-
-                if (stored.Skills != null)
-                {
-                    var skillState = ResolveSkillState(pawn);
-                    if (skillState == null ||
-                        !skillState.TryApplySnapshot(
-                            stored.Skills,
-                            out error))
-                    {
-                        error =
-                            $"[{pawn.name}] 스킬 복원 실패: {error}";
-                        return false;
-                    }
-                }
-
-                var restoredPosition = new Vector2(
-                    stored.PositionX,
-                    stored.PositionY);
-                if (movementManager != null)
-                {
-                    movementManager.RefreshMovementBudgetFromStats(
-                        pawn,
-                        false);
-                    movementManager.RestorePawnPosition(
-                        pawn,
-                        restoredPosition);
-                }
-                else
-                {
-                    pawn.TeleportTo(restoredPosition);
-                }
-
-                var position = pawn.transform.position;
-                position.z = stored.PositionZ;
-                pawn.transform.position = position;
-                pawn.transform.rotation = Quaternion.Euler(
-                    0f,
-                    0f,
-                    stored.RotationZ);
-            }
-
-            if (_checkHistory != null &&
-                !_checkHistory.TryRestore(
-                    snapshot.CheckHistory,
-                    out error))
-            {
-                error = "판정 기록 복원 실패: " + error;
-                return false;
-            }
-
-            return true;
-        }
-
-        private static bool TryPrepareStatStates(
-            IReadOnlyList<PawnLoadBinding> bindings,
-            out Dictionary<InteractivePawn, PlayerStatState> states,
-            out string error)
-        {
-            states = new Dictionary<InteractivePawn, PlayerStatState>();
-            error = string.Empty;
-
-            for (var index = 0; index < bindings.Count; index++)
-            {
-                var binding = bindings[index];
-                var stored = binding.Stored;
-                var pawn = binding.Current.Pawn;
-                if (stored.Stats == null)
-                    continue;
-
-                var hadMissingMetadata =
-                    string.IsNullOrWhiteSpace(
-                        stored.Stats.CharacterDefinitionId) ||
-                    string.IsNullOrWhiteSpace(
-                        stored.Stats.RuleTemplateId) ||
-                    stored.Stats.RuleTemplateVersion <= 0;
-
-                if (!PlayerStatState.TryResolveOrCreateForSnapshot(
-                        pawn.gameObject,
-                        pawn.Definition,
-                        stored.Stats,
-                        out var state,
-                        out var statError))
-                {
-                    error =
-                        $"[{pawn.name}] PlayerStatState 준비 실패: " +
-                        statError;
-                    return false;
-                }
-
-                if (hadMissingMetadata)
-                {
-                    Debug.LogWarning(
-                        $"[{pawn.name}] 구버전 스탯 저장 데이터의 " +
-                        "누락된 식별 정보를 현재 InteractivePawnDefinition으로 " +
-                        "보완했습니다. 불러온 뒤 새 슬롯으로 다시 저장하면 " +
-                        "최신 형식으로 기록됩니다.",
-                        pawn);
-                }
-
-                states.Add(pawn, state);
-            }
-
-            return true;
-        }
-
-        private bool TryHasMeaningfulDifference(
             CampaignSnapshot current,
-            CampaignSnapshot target,
-            out bool hasDifference,
+            out LoadPlan plan,
             out string error)
         {
-            hasDifference = true;
+            plan = null;
             error = string.Empty;
 
-            if (!TryBuildLoadBindings(
-                    target,
-                    out var bindings,
-                    out error))
-            {
-                return false;
-            }
-
-            if (!TryCollectPawnRecords(
-                    out var currentRecords,
-                    out error))
-            {
-                return false;
-            }
-
-            if (current == null || current.Pawns == null ||
-                currentRecords.Count != target.Pawns.Count)
-            {
-                hasDifference = true;
-                return true;
-            }
-
-            for (var index = 0; index < bindings.Count; index++)
-            {
-                var binding = bindings[index];
-                var currentPawn = CreatePawnSnapshot(binding.Current);
-                if (!ArePawnSnapshotsEquivalent(
-                        currentPawn,
-                        binding.Stored))
-                {
-                    hasDifference = true;
-                    return true;
-                }
-            }
-
-            hasDifference = !AreJsonSnapshotsEquivalent(
-                current.CheckHistory,
-                target.CheckHistory);
-            return true;
-        }
-
-        private bool TryBuildLoadBindings(
-            CampaignSnapshot snapshot,
-            out List<PawnLoadBinding> bindings,
-            out string error)
-        {
-            bindings = new List<PawnLoadBinding>();
-            error = string.Empty;
             if (snapshot == null || snapshot.Pawns == null)
             {
-                error = "Pawn 저장 데이터가 비어 있습니다.";
+                error =
+                    "[LOAD-102] Pawn 저장 데이터가 비어 있습니다.";
                 return false;
             }
 
             if (!TryCollectPawnRecords(
                     out var currentRecords,
-                    out error))
+                    out var collectError))
             {
+                error =
+                    "[LOAD-104] 현재 씬의 Pawn 식별 상태가 유효하지 " +
+                    "않습니다. " + collectError;
                 return false;
             }
+
+            plan = new LoadPlan
+            {
+                Snapshot = snapshot,
+                StoredPawnCount = snapshot.Pawns.Count,
+                CurrentPawnCount = currentRecords.Count
+            };
 
             var bySaveKey = new Dictionary<string, PawnSaveRecord>(
                 StringComparer.Ordinal);
@@ -858,54 +706,150 @@ namespace Trpg.Pawns
                 bySaveKey.Add(record.SaveKey, record);
             }
 
-            var used = new HashSet<InteractivePawn>();
+            var storedKeyCounts = new Dictionary<string, int>(
+                StringComparer.Ordinal);
             for (var index = 0; index < snapshot.Pawns.Count; index++)
             {
                 var stored = snapshot.Pawns[index];
                 if (stored == null ||
                     string.IsNullOrWhiteSpace(stored.InstanceId))
                 {
-                    error =
-                        "저장 데이터에 식별 키가 비어 있는 Pawn이 있습니다.";
-                    return false;
+                    continue;
+                }
+
+                if (!storedKeyCounts.TryGetValue(
+                        stored.InstanceId,
+                        out var count))
+                {
+                    count = 0;
+                }
+
+                storedKeyCounts[stored.InstanceId] = count + 1;
+            }
+
+            var used = new HashSet<InteractivePawn>();
+            for (var index = 0; index < snapshot.Pawns.Count; index++)
+            {
+                var stored = snapshot.Pawns[index];
+                if (stored == null)
+                {
+                    AddLoadIssue(
+                        plan.Issues,
+                        "LOAD-204",
+                        "(null)",
+                        "저장 데이터의 Pawn 항목이 null이라 건너뜁니다.");
+                    continue;
+                }
+
+                if (string.IsNullOrWhiteSpace(stored.InstanceId))
+                {
+                    AddLoadIssue(
+                        plan.Issues,
+                        "LOAD-204",
+                        ResolveStoredPawnLabel(stored),
+                        "저장 식별 키가 비어 있어 건너뜁니다.");
+                    continue;
+                }
+
+                if (storedKeyCounts.TryGetValue(
+                        stored.InstanceId,
+                        out var duplicateCount) &&
+                    duplicateCount > 1)
+                {
+                    AddLoadIssue(
+                        plan.Issues,
+                        "LOAD-204",
+                        ResolveStoredPawnLabel(stored),
+                        $"저장 식별 키가 {duplicateCount}번 중복되어 " +
+                        "정확한 대상을 판단할 수 없습니다. " +
+                        $"Key={stored.InstanceId}");
+                    continue;
                 }
 
                 PawnSaveRecord record = null;
+                var usedFallback = false;
                 if (bySaveKey.TryGetValue(
                         stored.InstanceId,
                         out var direct) &&
-                    !used.Contains(direct.Pawn))
+                    !used.Contains(direct.Pawn) &&
+                    IsDefinitionCompatible(stored, direct))
                 {
                     record = direct;
                 }
                 else
                 {
-                    record = ResolveLegacyOrMovedRecord(
+                    var candidates = CollectFallbackCandidates(
                         stored,
                         currentRecords,
                         used);
+                    if (candidates.Count == 1)
+                    {
+                        record = candidates[0];
+                        usedFallback = true;
+                    }
+                    else if (candidates.Count > 1)
+                    {
+                        AddLoadIssue(
+                            plan.Issues,
+                            "LOAD-204",
+                            ResolveStoredPawnLabel(stored),
+                            $"대응 가능한 Pawn이 {candidates.Count}개라 " +
+                            "정확한 개체를 판단할 수 없어 건너뜁니다. " +
+                            $"Key={stored.InstanceId}");
+                        continue;
+                    }
                 }
 
                 if (record == null)
                 {
-                    error =
-                        "씬에서 저장된 Pawn을 찾지 못했습니다: " +
-                        stored.InstanceId;
-                    return false;
+                    var directExists = bySaveKey.TryGetValue(
+                        stored.InstanceId,
+                        out var mismatchedDirect);
+                    var code = directExists &&
+                               mismatchedDirect != null &&
+                               !IsDefinitionCompatible(
+                                   stored,
+                                   mismatchedDirect)
+                        ? "LOAD-203"
+                        : "LOAD-201";
+                    var message = code == "LOAD-203"
+                        ? "저장된 Definition과 현재 Pawn Definition이 " +
+                          "달라 해당 Pawn을 건너뜁니다."
+                        : "저장된 Pawn을 현재 씬에서 찾지 못해 " +
+                          "건너뜁니다.";
+                    AddLoadIssue(
+                        plan.Issues,
+                        code,
+                        ResolveStoredPawnLabel(stored),
+                        message + $" Key={stored.InstanceId}");
+                    continue;
                 }
 
-                if (!string.Equals(
-                        stored.DefinitionId,
-                        record.DefinitionId,
-                        StringComparison.Ordinal))
+                if (usedFallback)
                 {
-                    error =
-                        $"Pawn 정의가 변경되었습니다: {stored.InstanceId}";
-                    return false;
+                    AddLoadIssue(
+                        plan.Issues,
+                        "LOAD-206",
+                        record.Pawn != null
+                            ? record.Pawn.name
+                            : ResolveStoredPawnLabel(stored),
+                        "저장 키가 변경되어 Definition/구형 ID 기준으로 " +
+                        "대체 연결했습니다.");
+                }
+
+                if (string.IsNullOrWhiteSpace(stored.DefinitionId))
+                {
+                    stored.DefinitionId = record.DefinitionId;
+                    AddLoadIssue(
+                        plan.Issues,
+                        "LOAD-207",
+                        record.Pawn.name,
+                        "구버전 저장의 빈 DefinitionId를 현재 Pawn " +
+                        "Definition으로 보완했습니다.");
                 }
 
                 used.Add(record.Pawn);
-                bindings.Add(
+                plan.Bindings.Add(
                     new PawnLoadBinding
                     {
                         Stored = stored,
@@ -913,28 +857,453 @@ namespace Trpg.Pawns
                     });
             }
 
+            for (var index = 0; index < currentRecords.Count; index++)
+            {
+                var record = currentRecords[index];
+                if (record == null ||
+                    record.Pawn == null ||
+                    used.Contains(record.Pawn))
+                {
+                    continue;
+                }
+
+                AddLoadIssue(
+                    plan.Issues,
+                    "LOAD-202",
+                    record.Pawn.name,
+                    "현재 씬에만 존재하므로 현재 상태를 유지합니다.");
+            }
+
+            plan.HasMeaningfulDifference = plan.Issues.Count > 0 ||
+                                           plan.Bindings.Count !=
+                                           snapshot.Pawns.Count;
+
+            if (!plan.HasMeaningfulDifference)
+            {
+                for (var index = 0; index < plan.Bindings.Count; index++)
+                {
+                    var binding = plan.Bindings[index];
+                    var currentPawn = CreatePawnSnapshot(binding.Current);
+                    if (!ArePawnSnapshotsEquivalent(
+                            currentPawn,
+                            binding.Stored))
+                    {
+                        plan.HasMeaningfulDifference = true;
+                        break;
+                    }
+                }
+            }
+
+            if (!plan.HasMeaningfulDifference && current != null)
+            {
+                plan.HasMeaningfulDifference =
+                    !AreJsonSnapshotsEquivalent(
+                        current.CheckHistory,
+                        snapshot.CheckHistory);
+            }
+
             return true;
         }
 
-        private static PawnSaveRecord ResolveLegacyOrMovedRecord(
+        private LoadResult ApplyLoadPlan(
+            LoadPlan plan,
+            CampaignSnapshot rollback)
+        {
+            var result = new LoadResult
+            {
+                TotalStoredPawnCount = plan.StoredPawnCount,
+                BoundPawnCount = plan.Bindings.Count
+            };
+            result.Issues.AddRange(plan.Issues);
+
+            _pawnManager.ClearSelection();
+            for (var index = 0; index < plan.Bindings.Count; index++)
+            {
+                ApplyPawnBinding(plan.Bindings[index], result);
+            }
+
+            result.SkippedPawnCount +=
+                Mathf.Max(0, plan.StoredPawnCount - plan.Bindings.Count);
+
+            if (_checkHistory != null)
+            {
+                if (_checkHistory.TryRestore(
+                        plan.Snapshot.CheckHistory,
+                        out var historyError))
+                {
+                    result.CheckHistoryRestored = true;
+                }
+                else
+                {
+                    AddLoadIssue(
+                        result.Issues,
+                        "LOAD-601",
+                        string.Empty,
+                        "판정 기록을 복원하지 못해 기존 기록을 " +
+                        "유지합니다. " + historyError);
+
+                    if (rollback != null)
+                    {
+                        _checkHistory.TryRestore(
+                            rollback.CheckHistory,
+                            out _);
+                    }
+                }
+            }
+
+            return result;
+        }
+
+        private void ApplyPawnBinding(
+            PawnLoadBinding binding,
+            LoadResult result)
+        {
+            var stored = binding.Stored;
+            var record = binding.Current;
+            var pawn = record != null ? record.Pawn : null;
+            if (stored == null || pawn == null)
+            {
+                result.SkippedPawnCount++;
+                AddLoadIssue(
+                    result.Issues,
+                    "LOAD-201",
+                    ResolveStoredPawnLabel(stored),
+                    "적용 직전에 Pawn 연결이 사라져 건너뜁니다.");
+                return;
+            }
+
+            PawnSnapshot before = null;
+            try
+            {
+                before = CreatePawnSnapshot(record);
+            }
+            catch (Exception exception)
+            {
+                result.SkippedPawnCount++;
+                AddLoadIssue(
+                    result.Issues,
+                    "LOAD-901",
+                    pawn.name,
+                    "현재 Pawn 상태를 백업하지 못해 이 Pawn을 " +
+                    "건너뜁니다. " + exception.Message);
+                return;
+            }
+
+            var requestedAreaCount = 1;
+            if (stored.Stats != null)
+                requestedAreaCount++;
+            if (stored.Skills != null)
+                requestedAreaCount++;
+
+            var restoredAreaCount = 0;
+            var pawnHasIssue = false;
+
+            if (stored.Stats != null)
+            {
+                if (TryRestoreStats(
+                        pawn,
+                        stored.Stats,
+                        before != null ? before.Stats : null,
+                        result.Issues))
+                {
+                    result.StatRestoredCount++;
+                    restoredAreaCount++;
+                }
+                else
+                {
+                    pawnHasIssue = true;
+                }
+            }
+
+            if (stored.Skills != null)
+            {
+                if (TryRestoreSkills(
+                        pawn,
+                        stored.Skills,
+                        before != null ? before.Skills : null,
+                        result.Issues))
+                {
+                    result.SkillRestoredCount++;
+                    restoredAreaCount++;
+                }
+                else
+                {
+                    pawnHasIssue = true;
+                }
+            }
+
+            if (TryRestorePosition(
+                    pawn,
+                    stored,
+                    before,
+                    result.Issues,
+                    out var positionHadWarning))
+            {
+                result.PositionRestoredCount++;
+                restoredAreaCount++;
+                pawnHasIssue |= positionHadWarning;
+            }
+            else
+            {
+                pawnHasIssue = true;
+            }
+
+            if (restoredAreaCount <= 0)
+            {
+                result.SkippedPawnCount++;
+            }
+            else if (pawnHasIssue ||
+                     restoredAreaCount < requestedAreaCount)
+            {
+                result.PartiallyRestoredPawnCount++;
+            }
+            else
+            {
+                result.FullyRestoredPawnCount++;
+            }
+        }
+
+        private static bool TryRestoreStats(
+            InteractivePawn pawn,
+            Trpg.Domain.Stats.StatRuntimeSnapshot target,
+            Trpg.Domain.Stats.StatRuntimeSnapshot rollback,
+            ICollection<LoadIssue> issues)
+        {
+            if (!PlayerStatState.TryResolveOrCreateForSnapshot(
+                    pawn.gameObject,
+                    pawn.Definition,
+                    target,
+                    out var state,
+                    out var prepareError))
+            {
+                AddLoadIssue(
+                    issues,
+                    "LOAD-301",
+                    pawn.name,
+                    "PlayerStatState를 준비하지 못해 스탯을 " +
+                    "건너뜁니다. " + prepareError);
+                return false;
+            }
+
+            if (state.TryApplySnapshot(target, out var applyError))
+                return true;
+
+            AddLoadIssue(
+                issues,
+                "LOAD-302",
+                pawn.name,
+                "스탯 Snapshot 적용에 실패해 기존 스탯을 " +
+                "유지합니다. " + applyError);
+
+            if (rollback != null &&
+                !state.TryApplySnapshot(rollback, out var restoreError))
+            {
+                AddLoadIssue(
+                    issues,
+                    "LOAD-309",
+                    pawn.name,
+                    "스탯 적용 실패 후 기존 스탯 복원에도 " +
+                    "실패했습니다. " + restoreError);
+            }
+
+            return false;
+        }
+
+        private static bool TryRestoreSkills(
+            InteractivePawn pawn,
+            SkillRuntimeSnapshot target,
+            SkillRuntimeSnapshot rollback,
+            ICollection<LoadIssue> issues)
+        {
+            var state = ResolveSkillState(pawn);
+            if (state == null)
+            {
+                AddLoadIssue(
+                    issues,
+                    "LOAD-401",
+                    pawn.name,
+                    "PlayerSkillState를 준비하지 못해 스킬을 " +
+                    "건너뜁니다.");
+                return false;
+            }
+
+            if (state.TryApplySnapshot(target, out var applyError))
+                return true;
+
+            AddLoadIssue(
+                issues,
+                "LOAD-402",
+                pawn.name,
+                "스킬 Snapshot 적용에 실패해 기존 스킬을 " +
+                "유지합니다. " + applyError);
+
+            if (rollback != null &&
+                !state.TryApplySnapshot(rollback, out var restoreError))
+            {
+                AddLoadIssue(
+                    issues,
+                    "LOAD-409",
+                    pawn.name,
+                    "스킬 적용 실패 후 기존 스킬 복원에도 " +
+                    "실패했습니다. " + restoreError);
+            }
+
+            return false;
+        }
+
+        private bool TryRestorePosition(
+            InteractivePawn pawn,
+            PawnSnapshot target,
+            PawnSnapshot rollback,
+            ICollection<LoadIssue> issues,
+            out bool hadWarning)
+        {
+            hadWarning = false;
+            if (!IsFinite(target.PositionX) ||
+                !IsFinite(target.PositionY) ||
+                !IsFinite(target.PositionZ) ||
+                !IsFinite(target.RotationZ))
+            {
+                AddLoadIssue(
+                    issues,
+                    "LOAD-501",
+                    pawn.name,
+                    "위치 또는 회전 값이 NaN/Infinity라 기존 위치를 " +
+                    "유지합니다.");
+                return false;
+            }
+
+            try
+            {
+                var restoredPosition = new Vector2(
+                    target.PositionX,
+                    target.PositionY);
+                var movementManager = _pawnManager.MovementManager;
+                if (movementManager != null)
+                {
+                    movementManager.RefreshMovementBudgetFromStats(
+                        pawn,
+                        false);
+                    if (!movementManager.RestorePawnPosition(
+                            pawn,
+                            restoredPosition))
+                    {
+                        pawn.TeleportTo(restoredPosition);
+                        hadWarning = true;
+                        AddLoadIssue(
+                            issues,
+                            "LOAD-503",
+                            pawn.name,
+                            "MovementManager 내부 위치 동기화에 실패해 " +
+                            "Transform 위치만 복원했습니다.");
+                    }
+                }
+                else
+                {
+                    pawn.TeleportTo(restoredPosition);
+                    hadWarning = true;
+                    AddLoadIssue(
+                        issues,
+                        "LOAD-503",
+                        pawn.name,
+                        "PawnMovementManager가 없어 Transform 위치만 " +
+                        "복원했습니다.");
+                }
+
+                var position = pawn.transform.position;
+                position.z = target.PositionZ;
+                pawn.transform.position = position;
+                pawn.transform.rotation = Quaternion.Euler(
+                    0f,
+                    0f,
+                    target.RotationZ);
+                return true;
+            }
+            catch (Exception exception)
+            {
+                AddLoadIssue(
+                    issues,
+                    "LOAD-502",
+                    pawn.name,
+                    "위치 복원 중 예외가 발생해 기존 위치를 " +
+                    "유지합니다. " + exception.Message);
+
+                if (rollback != null)
+                    RestorePositionBestEffort(pawn, rollback);
+                return false;
+            }
+        }
+
+        private void RestorePositionBestEffort(
+            InteractivePawn pawn,
+            PawnSnapshot snapshot)
+        {
+            if (pawn == null || snapshot == null)
+                return;
+
+            try
+            {
+                var position2D = new Vector2(
+                    snapshot.PositionX,
+                    snapshot.PositionY);
+                var movementManager = _pawnManager.MovementManager;
+                if (movementManager != null)
+                    movementManager.RestorePawnPosition(pawn, position2D);
+                else
+                    pawn.TeleportTo(position2D);
+
+                var position = pawn.transform.position;
+                position.z = snapshot.PositionZ;
+                pawn.transform.position = position;
+                pawn.transform.rotation = Quaternion.Euler(
+                    0f,
+                    0f,
+                    snapshot.RotationZ);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogError(
+                    $"[{pawn.name}] 위치 롤백 실패: {exception.Message}",
+                    pawn);
+            }
+        }
+
+        private static bool IsFinite(float value)
+        {
+            return !float.IsNaN(value) &&
+                   !float.IsInfinity(value);
+        }
+
+        private static bool IsDefinitionCompatible(
+            PawnSnapshot stored,
+            PawnSaveRecord record)
+        {
+            if (stored == null || record == null)
+                return false;
+
+            return string.IsNullOrWhiteSpace(stored.DefinitionId) ||
+                   string.Equals(
+                       stored.DefinitionId,
+                       record.DefinitionId,
+                       StringComparison.Ordinal);
+        }
+
+        private static List<PawnSaveRecord> CollectFallbackCandidates(
             PawnSnapshot stored,
             IReadOnlyList<PawnSaveRecord> records,
             ISet<InteractivePawn> used)
         {
+            var result = new List<PawnSaveRecord>();
             var groupHint = ResolveGroupHint(stored.InstanceId);
             var legacyId = ResolveLegacyId(stored.InstanceId);
 
-            PawnSaveRecord firstNonPlayer = null;
             for (var index = 0; index < records.Count; index++)
             {
                 var record = records[index];
                 if (record == null ||
                     record.Pawn == null ||
                     used.Contains(record.Pawn) ||
-                    !string.Equals(
-                        record.DefinitionId,
-                        stored.DefinitionId,
-                        StringComparison.Ordinal))
+                    !IsDefinitionCompatible(stored, record))
                 {
                     continue;
                 }
@@ -954,19 +1323,10 @@ namespace Trpg.Pawns
                     continue;
                 }
 
-                if (record.Group == PawnSaveGroup.Player)
-                    return record;
-
-                if (firstNonPlayer == null)
-                    firstNonPlayer = record;
+                result.Add(record);
             }
 
-            if (firstNonPlayer != null)
-                return firstNonPlayer;
-
-            // 아주 오래된 저장은 Monster/NPC 키에 그룹 정보가 없습니다.
-            // 같은 Definition을 가진 미사용 비플레이어를 순서대로 연결합니다.
-            if (!groupHint.HasValue)
+            if (result.Count == 0 && !groupHint.HasValue)
             {
                 for (var index = 0; index < records.Count; index++)
                 {
@@ -975,19 +1335,192 @@ namespace Trpg.Pawns
                         record.Pawn == null ||
                         record.Group == PawnSaveGroup.Player ||
                         used.Contains(record.Pawn) ||
-                        !string.Equals(
-                            record.DefinitionId,
-                            stored.DefinitionId,
-                            StringComparison.Ordinal))
+                        !IsDefinitionCompatible(stored, record))
                     {
                         continue;
                     }
 
-                    return record;
+                    result.Add(record);
                 }
             }
 
-            return null;
+            return result;
+        }
+
+        private static string ResolveStoredPawnLabel(
+            PawnSnapshot stored)
+        {
+            if (stored == null)
+                return "(null)";
+            if (!string.IsNullOrWhiteSpace(stored.DefinitionId))
+                return stored.DefinitionId;
+            if (!string.IsNullOrWhiteSpace(stored.InstanceId))
+                return stored.InstanceId;
+            return "(식별 불가 Pawn)";
+        }
+
+        private static void AddLoadIssue(
+            ICollection<LoadIssue> issues,
+            string code,
+            string pawnName,
+            string message)
+        {
+            if (issues == null)
+                return;
+
+            issues.Add(
+                new LoadIssue
+                {
+                    Code = code,
+                    PawnName = pawnName ?? string.Empty,
+                    Message = message ?? string.Empty
+                });
+        }
+
+        private static string BuildLoadConfirmationMessage(LoadPlan plan)
+        {
+            var missing = CountIssues(plan.Issues, "LOAD-201");
+            var currentOnly = CountIssues(plan.Issues, "LOAD-202");
+            var incompatible = CountIssues(plan.Issues, "LOAD-203");
+            var ambiguous = CountIssues(plan.Issues, "LOAD-204");
+
+            var builder = new StringBuilder(320);
+            builder.AppendLine("저장 데이터를 검사했습니다.");
+            builder.Append("복원 가능: ")
+                .Append(plan.Bindings.Count)
+                .Append(" / 저장 Pawn: ")
+                .Append(plan.StoredPawnCount)
+                .Append(" / 현재 씬 Pawn: ")
+                .AppendLine(plan.CurrentPawnCount.ToString());
+
+            if (plan.Issues.Count > 0)
+            {
+                builder.Append("누락 ")
+                    .Append(missing)
+                    .Append(" · 현재 씬 전용 ")
+                    .Append(currentOnly)
+                    .Append(" · 정의 불일치 ")
+                    .Append(incompatible)
+                    .Append(" · 모호함 ")
+                    .AppendLine(ambiguous.ToString());
+                builder.Append("경고 코드: ")
+                    .AppendLine(BuildIssueCodeSummary(plan.Issues));
+            }
+
+            builder.AppendLine();
+            builder.AppendLine(
+                "현재 저장하지 않은 데이터가 소실될 수 있습니다.");
+            builder.Append(
+                plan.Issues.Count > 0
+                    ? "확인된 항목만 불러오시겠습니까?"
+                    : "불러오시겠습니까?");
+            return builder.ToString();
+        }
+
+        private static string BuildLoadResultMessage(LoadResult result)
+        {
+            var builder = new StringBuilder(640);
+            builder.AppendLine(
+                result.Issues.Count > 0
+                    ? "부분 불러오기 완료"
+                    : "불러왔습니다.");
+            builder.Append("저장 Pawn ")
+                .Append(result.TotalStoredPawnCount)
+                .Append(" · 연결 ")
+                .AppendLine(result.BoundPawnCount.ToString());
+            builder.Append("Pawn 완전 복원 ")
+                .Append(result.FullyRestoredPawnCount)
+                .Append(" · 부분 복원 ")
+                .Append(result.PartiallyRestoredPawnCount)
+                .Append(" · 건너뜀 ")
+                .AppendLine(result.SkippedPawnCount.ToString());
+            builder.Append("위치 ")
+                .Append(result.PositionRestoredCount)
+                .Append(" · 스탯 ")
+                .Append(result.StatRestoredCount)
+                .Append(" · 스킬 ")
+                .AppendLine(result.SkillRestoredCount.ToString());
+
+            if (result.Issues.Count > 0)
+            {
+                builder.Append("경고 ")
+                    .Append(result.Issues.Count)
+                    .AppendLine("건");
+
+                var displayCount = Mathf.Min(6, result.Issues.Count);
+                for (var index = 0; index < displayCount; index++)
+                    builder.AppendLine(result.Issues[index].ToString());
+
+                if (result.Issues.Count > displayCount)
+                {
+                    builder.Append("외 ")
+                        .Append(result.Issues.Count - displayCount)
+                        .AppendLine("건 — Console에서 전체 확인");
+                }
+            }
+
+            return builder.ToString().TrimEnd();
+        }
+
+        private static string BuildIssueCodeSummary(
+            IReadOnlyList<LoadIssue> issues)
+        {
+            var counts = new Dictionary<string, int>(
+                StringComparer.Ordinal);
+            var order = new List<string>();
+            for (var index = 0; index < issues.Count; index++)
+            {
+                var code = issues[index].Code ?? "LOAD-000";
+                if (!counts.TryGetValue(code, out var count))
+                {
+                    counts.Add(code, 1);
+                    order.Add(code);
+                }
+                else
+                {
+                    counts[code] = count + 1;
+                }
+            }
+
+            var builder = new StringBuilder(96);
+            for (var index = 0; index < order.Count; index++)
+            {
+                if (index > 0)
+                    builder.Append(", ");
+
+                var code = order[index];
+                builder.Append(code)
+                    .Append('×')
+                    .Append(counts[code]);
+            }
+
+            return builder.ToString();
+        }
+
+        private static int CountIssues(
+            IReadOnlyList<LoadIssue> issues,
+            string code)
+        {
+            var count = 0;
+            for (var index = 0; index < issues.Count; index++)
+            {
+                if (string.Equals(
+                        issues[index].Code,
+                        code,
+                        StringComparison.Ordinal))
+                {
+                    count++;
+                }
+            }
+
+            return count;
+        }
+
+        private static void LogLoadIssues(
+            IReadOnlyList<LoadIssue> issues)
+        {
+            for (var index = 0; index < issues.Count; index++)
+                Debug.LogWarning(issues[index].ToString());
         }
 
         private bool TryCollectPawnRecords(
@@ -1281,7 +1814,7 @@ namespace Trpg.Pawns
             panelRect.anchorMax = new Vector2(0.5f, 0.5f);
             panelRect.pivot = new Vector2(0.5f, 0.5f);
             panelRect.anchoredPosition = Vector2.zero;
-            panelRect.sizeDelta = new Vector2(600f, 270f);
+            panelRect.sizeDelta = new Vector2(700f, 360f);
             panel.GetComponent<Image>().color =
                 new Color(0.025f, 0.075f, 0.095f, 0.99f);
 
@@ -1300,21 +1833,23 @@ namespace Trpg.Pawns
             title.rectTransform.offsetMin = new Vector2(24f, -66f);
             title.rectTransform.offsetMax = new Vector2(-24f, -16f);
 
-            var body = CreateConfirmationText(
+            _loadConfirmationBodyText = CreateConfirmationText(
                 "Body",
                 panelRect,
                 font,
                 18,
                 FontStyle.Normal,
                 TextAnchor.MiddleCenter);
-            body.text =
-                "현재 데이터와 불러올 저장 데이터가 다릅니다.\n" +
-                "현재 저장하지 않은 데이터가 소실될 것입니다.\n" +
-                "괜찮으신가요?";
-            body.rectTransform.anchorMin = new Vector2(0f, 0f);
-            body.rectTransform.anchorMax = new Vector2(1f, 1f);
-            body.rectTransform.offsetMin = new Vector2(34f, 78f);
-            body.rectTransform.offsetMax = new Vector2(-34f, -72f);
+            _loadConfirmationBodyText.text =
+                "저장 데이터를 검사하고 있습니다.";
+            _loadConfirmationBodyText.rectTransform.anchorMin =
+                new Vector2(0f, 0f);
+            _loadConfirmationBodyText.rectTransform.anchorMax =
+                new Vector2(1f, 1f);
+            _loadConfirmationBodyText.rectTransform.offsetMin =
+                new Vector2(34f, 78f);
+            _loadConfirmationBodyText.rectTransform.offsetMax =
+                new Vector2(-34f, -72f);
 
             _loadConfirmationCancelButton =
                 CreateConfirmationButton(
@@ -1426,7 +1961,7 @@ namespace Trpg.Pawns
             if (_loadConfirmationRoot != null)
                 _loadConfirmationRoot.SetActive(false);
 
-            _pendingLoadSnapshot = null;
+            _pendingLoadPlan = null;
             _pendingRollbackSnapshot = null;
         }
 
@@ -1446,6 +1981,7 @@ namespace Trpg.Pawns
 
             _loadConfirmationAcceptButton = null;
             _loadConfirmationCancelButton = null;
+            _loadConfirmationBodyText = null;
         }
 
         private void RefreshSlots()
