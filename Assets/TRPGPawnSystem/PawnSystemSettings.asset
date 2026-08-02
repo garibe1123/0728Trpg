@@ -16,9 +16,10 @@ MonoBehaviour:
   _legacyDefaultMoveMeters: 0
   _legacyDefaultMoveMetersPerTurn: 0
   _defaultMovementScore: 40
-  _metersPerMovementPoint: 0.2
+  _metersPerMovementPoint: 0.3048
+  _movementStepMeters: 0.1
   _gridCellMeters: 1.524
-  _snapDestinationToGrid: 1
+  _snapDestinationToMovementStep: 1
   _maxProjectionMeters: 0.3
   _doorGuardSeconds: 0.2
   _infoBarColor: {r: 0.055, g: 0.07, b: 0.09, a: 0.96}

@@ -5,6 +5,7 @@ using Trpg.Data.Inventory;
 using Trpg.Domain.Stats;
 using Trpg.UI.Handouts;
 using Trpg.UI.Inventory;
+using Trpg.UI.Profile;
 using Trpg.UI.Skills;
 using Trpg.UI.Stats;
 using UnityEngine;
@@ -58,6 +59,11 @@ namespace Trpg.Pawns
         [SerializeField, Tooltip("시나리오에 미리 제작한 Handout Definition 카탈로그")]
         private HandoutCatalogDefinition _handoutCatalog;
 
+        [Header("Board Dashboard")]
+        [SerializeField, Tooltip(
+            "활성화하면 PawnUIManager가 BoardUiStackManager를 자동 설치합니다.")]
+        private bool _enableBoardDashboard = true;
+
         [Header("Movement")]
         [FormerlySerializedAs("_moveButton")]
         [FormerlySerializedAs("_movementButton")]
@@ -96,6 +102,8 @@ namespace Trpg.Pawns
         private PlayerSkillState _boundSkillState;
         private PlayerInventoryState _boundInventoryState;
         private PawnInventoryWidget _inventoryWidget;
+        private PawnProfileState _boundProfileState;
+        private PawnProfileWidget _profileWidget;
         private PublicHandoutState _publicHandoutState;
         private PublicHandoutWidget _handoutWidget;
         private Button _handoutButton;
@@ -103,6 +111,82 @@ namespace Trpg.Pawns
         private string _boundDisplayName;
         private Sprite _boundPortrait;
         private bool _isRollInProgress;
+        private BoardUiStackManager _boardStackManager;
+
+        public PawnInfoBarWidget InfoBar => _infoBar;
+        public PawnManager PawnManager => _pawnManager;
+        public PlayerStatState BoundStatState => _boundStatState;
+        public PlayerSkillState BoundSkillState => _boundSkillState;
+        public PlayerInventoryState BoundInventoryState => _boundInventoryState;
+        public PawnProfileState BoundProfileState => _boundProfileState;
+        public string BoundDisplayName => _boundDisplayName;
+        public Sprite BoundPortrait => _boundPortrait;
+        public bool HasBoardStack => _boardStackManager != null;
+
+        public void RegisterBoardStack(BoardUiStackManager manager)
+        {
+            _boardStackManager = manager;
+            _inventoryWidget?.Hide();
+            _profileWidget?.Hide();
+            _infoBar?.SetBoardStackMode(manager != null);
+        }
+
+        public void UnregisterBoardStack(BoardUiStackManager manager)
+        {
+            if (_boardStackManager != manager)
+                return;
+
+            HideInventoryFromBoardStack();
+            HideProfileFromBoardStack();
+            _boardStackManager = null;
+            _infoBar?.SetBoardStackMode(false);
+        }
+
+        public bool ShowInventoryInBoardStack(RectTransform host)
+        {
+            if (host == null || _boundInventoryState == null)
+                return false;
+
+            EnsureInventoryWidget();
+            if (_inventoryWidget == null)
+                return false;
+
+            RefreshInventoryUi();
+            _inventoryWidget.SetEmbeddedMode(host, true);
+            _inventoryWidget.Show();
+            return true;
+        }
+
+        public void HideInventoryFromBoardStack()
+        {
+            if (_inventoryWidget == null)
+                return;
+            _inventoryWidget.Hide();
+            _inventoryWidget.SetEmbeddedMode(null, false);
+        }
+
+        public bool ShowProfileInBoardStack(RectTransform host)
+        {
+            if (host == null || _boundProfileState == null)
+                return false;
+
+            EnsureProfileWidget();
+            if (_profileWidget == null)
+                return false;
+
+            _profileWidget.Bind(_boundProfileState, _boundDisplayName);
+            _profileWidget.SetEmbeddedMode(host, true);
+            _profileWidget.Show(null);
+            return true;
+        }
+
+        public void HideProfileFromBoardStack()
+        {
+            if (_profileWidget == null)
+                return;
+            _profileWidget.Hide();
+            _profileWidget.SetEmbeddedMode(null, false);
+        }
 
         private void Awake()
         {
@@ -126,6 +210,34 @@ namespace Trpg.Pawns
             _publicHandoutState = PublicHandoutState.ResolveOrCreate(
                 gameObject,
                 _handoutCatalog);
+            EnsureBoardDashboard();
+        }
+
+        private void EnsureBoardDashboard()
+        {
+            if (!_enableBoardDashboard)
+                return;
+
+#if UNITY_2023_1_OR_NEWER
+            var existing = UnityEngine.Object.FindObjectsByType<
+                BoardUiStackManager>(
+                FindObjectsInactive.Include,
+                FindObjectsSortMode.None);
+#else
+            var existing = UnityEngine.Object.FindObjectsOfType<
+                BoardUiStackManager>(true);
+#endif
+            for (var index = 0; index < existing.Length; index++)
+            {
+                var manager = existing[index];
+                if (manager != null && manager.gameObject != gameObject)
+                    manager.enabled = false;
+            }
+
+            var local = GetComponent<BoardUiStackManager>();
+            if (local == null)
+                local = gameObject.AddComponent<BoardUiStackManager>();
+            local.Configure(this);
         }
 
         private void OnEnable()
@@ -162,6 +274,8 @@ namespace Trpg.Pawns
                 HandleSkillRemoveRequested;
             _infoBar.InventoryRequested +=
                 HandleInventoryRequested;
+            _infoBar.ProfileRequested +=
+                HandleProfileRequested;
 
             BindHandoutSystem();
             BindWalkButton();
@@ -203,13 +317,23 @@ namespace Trpg.Pawns
                     HandleSkillRemoveRequested;
                 _infoBar.InventoryRequested -=
                     HandleInventoryRequested;
+                _infoBar.ProfileRequested -=
+                    HandleProfileRequested;
                 _infoBar.Hide();
             }
 
             UnbindStatState();
             UnbindSkillState();
             UnbindInventoryState();
-            _inventoryWidget?.Hide();
+            if (_boardStackManager != null)
+                HideInventoryFromBoardStack();
+            else
+                _inventoryWidget?.Hide();
+            UnbindProfileState();
+            if (_boardStackManager != null)
+                HideProfileFromBoardStack();
+            else
+                _profileWidget?.Hide();
             UnbindHandoutSystem();
             _handoutWidget?.Hide();
             if (_handoutButton != null)
@@ -225,6 +349,12 @@ namespace Trpg.Pawns
             {
                 Destroy(_inventoryWidget.gameObject);
                 _inventoryWidget = null;
+            }
+
+            if (_profileWidget != null)
+            {
+                Destroy(_profileWidget.gameObject);
+                _profileWidget = null;
             }
 
             if (_handoutWidget != null)
@@ -244,6 +374,7 @@ namespace Trpg.Pawns
         private void HandleCloseRequested()
         {
             _inventoryWidget?.Hide();
+            _profileWidget?.Hide();
             _pawnManager.ClearSelection();
         }
 
@@ -253,7 +384,15 @@ namespace Trpg.Pawns
             UnbindStatState();
             UnbindSkillState();
             UnbindInventoryState();
-            _inventoryWidget?.Hide();
+            if (_boardStackManager != null)
+                HideInventoryFromBoardStack();
+            else
+                _inventoryWidget?.Hide();
+            UnbindProfileState();
+            if (_boardStackManager != null)
+                HideProfileFromBoardStack();
+            else
+                _profileWidget?.Hide();
 
             if (pawn == null || pawn.Definition == null)
             {
@@ -278,6 +417,7 @@ namespace Trpg.Pawns
                 definition.MovementScore);
 
             _infoBar.Bind(infoData);
+            _infoBar.SetProfileButtonEnabled(IsPlayerPawn(pawn));
 
             var statState = ResolveStatState(pawn);
             if (statState != null)
@@ -302,6 +442,14 @@ namespace Trpg.Pawns
                     pawn.gameObject,
                     definition,
                     _itemCatalog));
+
+            if (IsPlayerPawn(pawn))
+            {
+                BindProfileState(
+                    PawnProfileState.ResolveOrCreate(
+                        pawn.gameObject,
+                        definition));
+            }
 
             RefreshMovementBudget(pawn);
             RefreshWalkButton(pawn);
@@ -437,6 +585,43 @@ namespace Trpg.Pawns
             }
 
             _boundInventoryState = null;
+        }
+
+        private void BindProfileState(PawnProfileState profileState)
+        {
+            if (profileState == null)
+                return;
+
+            if (!profileState.IsInitialized)
+                profileState.Initialize();
+            if (!profileState.IsInitialized)
+                return;
+
+            _boundProfileState = profileState;
+            _boundProfileState.Changed -=
+                HandleBoundProfileStateChanged;
+            _boundProfileState.Changed +=
+                HandleBoundProfileStateChanged;
+        }
+
+        private void UnbindProfileState()
+        {
+            if (_boundProfileState != null)
+            {
+                _boundProfileState.Changed -=
+                    HandleBoundProfileStateChanged;
+            }
+
+            _boundProfileState = null;
+        }
+
+        private void HandleBoundProfileStateChanged()
+        {
+            if (_profileWidget != null &&
+                _profileWidget.IsVisible)
+            {
+                _profileWidget.RefreshFromState();
+            }
         }
 
         private void HandleBoundInventoryStateChanged()
@@ -761,8 +946,77 @@ namespace Trpg.Pawns
                 _handoutCatalog);
         }
 
+        private void HandleProfileRequested()
+        {
+            if (_boardStackManager != null)
+            {
+                _boardStackManager.RequestTab(SheetTab.Profile);
+                return;
+            }
+
+            if (_boundProfileState == null)
+                return;
+
+            EnsureProfileWidget();
+            if (_profileWidget == null)
+                return;
+
+            if (_profileWidget.IsVisible)
+            {
+                _profileWidget.Hide();
+                return;
+            }
+
+            _profileWidget.Bind(
+                _boundProfileState,
+                _boundDisplayName);
+            _profileWidget.Show(_infoBar.PortraitAnchorRect);
+        }
+
+        private void EnsureProfileWidget()
+        {
+            if (_profileWidget != null || _infoBar == null)
+                return;
+
+            var canvas = _infoBar.GetComponentInParent<Canvas>();
+            var rootCanvas = canvas != null ? canvas.rootCanvas : null;
+            if (rootCanvas == null)
+            {
+                Debug.LogError(
+                    $"[{name}] 플레이어 정보 UI를 생성할 Root Canvas를 " +
+                    "찾지 못했습니다.",
+                    this);
+                return;
+            }
+
+            var text = _infoBar.GetComponentInChildren<Text>(true);
+            _profileWidget = PawnProfileWidget.CreateRuntime(
+                rootCanvas.transform as RectTransform,
+                text != null ? text.font : null);
+            _profileWidget.CloseRequested +=
+                HandleProfileCloseRequested;
+            _profileWidget.Applied +=
+                HandleProfileApplied;
+        }
+
+        private void HandleProfileCloseRequested()
+        {
+            _profileWidget?.Hide();
+        }
+
+        private void HandleProfileApplied()
+        {
+            // PawnProfileState가 직접 변경 이벤트를 발행합니다.
+        }
+
         private void HandleInventoryRequested()
         {
+            if (_boardStackManager != null)
+            {
+                _boardStackManager.RequestTab(SheetTab.Bag);
+                return;
+            }
+
             if (_boundInventoryState == null)
                 return;
 
@@ -797,7 +1051,7 @@ namespace Trpg.Pawns
 
             var text = _infoBar.GetComponentInChildren<Text>(true);
             _inventoryWidget = PawnInventoryWidget.CreateRuntime(
-                rootCanvas,
+                rootCanvas.transform as RectTransform,
                 text != null ? text.font : null);
             _inventoryWidget.AddRequested +=
                 HandleInventoryAddRequested;
@@ -900,6 +1154,14 @@ namespace Trpg.Pawns
                 capacity,
                 _itemCatalog,
                 _inventoryIconSet);
+        }
+
+        private static bool IsPlayerPawn(InteractivePawn pawn)
+        {
+            var definition = pawn != null ? pawn.Definition : null;
+            return definition != null &&
+                   definition.Kind == InteractivePawnKind.Moveable &&
+                   definition.MoveableKind == MoveablePawnKind.Player;
         }
 
         private void RefreshStatUi()

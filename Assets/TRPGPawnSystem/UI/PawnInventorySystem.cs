@@ -848,9 +848,25 @@ namespace Trpg.UI.Inventory
         private RectTransform _panelRect;
         private RectTransform _contentRect;
         private RectTransform _windowDragHandle;
+        private RectTransform _viewportRect;
         private Text _weightText;
+        private Text _titleText;
         private Text _emptyText;
+        private Button _addButton;
+        private Button _closeButton;
         private Font _font;
+        private bool _isEmbedded;
+        private RectTransform _legacyRootParent;
+        private Vector2 _legacyRootAnchorMin;
+        private Vector2 _legacyRootAnchorMax;
+        private Vector2 _legacyRootPivot;
+        private Vector2 _legacyRootAnchoredPosition;
+        private Vector2 _legacyRootSizeDelta;
+        private Vector2 _legacyPanelAnchorMin;
+        private Vector2 _legacyPanelAnchorMax;
+        private Vector2 _legacyPanelPivot;
+        private Vector2 _legacyPanelAnchoredPosition;
+        private Vector2 _legacyPanelSizeDelta;
 
         private GameObject _addPanel;
         private Button _catalogModeButton;
@@ -899,21 +915,78 @@ namespace Trpg.UI.Inventory
         public event Action CloseRequested;
 
         public bool IsVisible => _isVisible;
+        public bool IsEmbedded => _isEmbedded;
+        public RectTransform RootRect => _rootRect;
+        public RectTransform PanelRect => _panelRect;
 
         public static PawnInventoryWidget CreateRuntime(
-            Canvas rootCanvas,
+            RectTransform parentRect,
             Font font)
         {
-            if (rootCanvas == null)
-                throw new ArgumentNullException(nameof(rootCanvas));
+            if (parentRect == null)
+                throw new ArgumentNullException(nameof(parentRect));
 
             var root = new GameObject(
                 "PawnInventoryWidget",
                 typeof(RectTransform),
                 typeof(CanvasGroup));
             var widget = root.AddComponent<PawnInventoryWidget>();
-            widget.BuildRuntime(rootCanvas, font);
+            widget.BuildRuntime(parentRect, font);
             return widget;
+        }
+
+        public void SetEmbeddedMode(
+            RectTransform host,
+            bool enabled)
+        {
+            if (_rootRect == null || _panelRect == null)
+                return;
+
+            if (enabled)
+            {
+                if (host == null)
+                    throw new ArgumentNullException(nameof(host));
+
+                if (!_isEmbedded)
+                {
+                    _legacyRootParent = _rootRect.parent as RectTransform;
+                    _legacyRootAnchorMin = _rootRect.anchorMin;
+                    _legacyRootAnchorMax = _rootRect.anchorMax;
+                    _legacyRootPivot = _rootRect.pivot;
+                    _legacyRootAnchoredPosition = _rootRect.anchoredPosition;
+                    _legacyRootSizeDelta = _rootRect.sizeDelta;
+                    _legacyPanelAnchorMin = _panelRect.anchorMin;
+                    _legacyPanelAnchorMax = _panelRect.anchorMax;
+                    _legacyPanelPivot = _panelRect.pivot;
+                    _legacyPanelAnchoredPosition = _panelRect.anchoredPosition;
+                    _legacyPanelSizeDelta = _panelRect.sizeDelta;
+                }
+
+                _isEmbedded = true;
+                _rootRect.SetParent(host, false);
+                StretchRect(_rootRect);
+                StretchRect(_panelRect);
+                ApplyEmbeddedLayout();
+                return;
+            }
+
+            if (!_isEmbedded)
+                return;
+
+            _isEmbedded = false;
+            if (_legacyRootParent != null)
+                _rootRect.SetParent(_legacyRootParent, false);
+            _rootRect.anchorMin = _legacyRootAnchorMin;
+            _rootRect.anchorMax = _legacyRootAnchorMax;
+            _rootRect.pivot = _legacyRootPivot;
+            _rootRect.anchoredPosition = _legacyRootAnchoredPosition;
+            _rootRect.sizeDelta = _legacyRootSizeDelta;
+            _panelRect.anchorMin = _legacyPanelAnchorMin;
+            _panelRect.anchorMax = _legacyPanelAnchorMax;
+            _panelRect.pivot = _legacyPanelPivot;
+            _panelRect.anchoredPosition = _legacyPanelAnchoredPosition;
+            _panelRect.sizeDelta = _legacyPanelSizeDelta;
+            ApplyFloatingLayout();
         }
 
         public void Bind(
@@ -963,9 +1036,12 @@ namespace Trpg.UI.Inventory
             }
 
             Canvas.ForceUpdateCanvases();
-            if (!_hasUserMovedWindow && anchorRect != null)
-                PositionAboveAnchor(anchorRect);
-            ClampPanelToRoot();
+            if (!_isEmbedded)
+            {
+                if (!_hasUserMovedWindow && anchorRect != null)
+                    PositionAboveAnchor(anchorRect);
+                ClampPanelToRoot();
+            }
         }
 
         public void Hide()
@@ -986,17 +1062,15 @@ namespace Trpg.UI.Inventory
                 _rootRect.gameObject.SetActive(false);
         }
 
-        private void BuildRuntime(Canvas rootCanvas, Font font)
+        private void BuildRuntime(RectTransform parentRect, Font font)
         {
-            _rootCanvas = rootCanvas.rootCanvas != null
-                ? rootCanvas.rootCanvas
-                : rootCanvas;
+            _rootCanvas = parentRect.GetComponentInParent<Canvas>();
             _font = font != null
                 ? font
                 : Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
 
             _rootRect = GetComponent<RectTransform>();
-            _rootRect.SetParent(_rootCanvas.transform, false);
+            _rootRect.SetParent(parentRect, false);
             _rootRect.anchorMin = Vector2.zero;
             _rootRect.anchorMax = Vector2.one;
             _rootRect.offsetMin = Vector2.zero;
@@ -1067,50 +1141,50 @@ namespace Trpg.UI.Inventory
                 new Vector2(180f, 34f));
             _weightText.raycastTarget = false;
 
-            var title = CreateText(
+            _titleText = CreateText(
                 "Title",
                 _panelRect,
                 "INVENTORY",
                 20,
                 TextAnchor.MiddleCenter);
             SetRect(
-                title.rectTransform,
+                _titleText.rectTransform,
                 new Vector2(0.5f, 1f),
                 new Vector2(0.5f, 1f),
                 new Vector2(0.5f, 1f),
                 new Vector2(0f, -16f),
                 new Vector2(140f, 34f));
-            title.raycastTarget = false;
+            _titleText.raycastTarget = false;
 
-            var addButton = CreateButton(
+            _addButton = CreateButton(
                 "AddButton",
                 _panelRect,
                 "+",
                 24,
                 new Color(0.10f, 0.28f, 0.34f, 1f));
             SetRect(
-                addButton.GetComponent<RectTransform>(),
+                _addButton.GetComponent<RectTransform>(),
                 Vector2.one,
                 Vector2.one,
                 Vector2.one,
                 new Vector2(-62f, -16f),
                 new Vector2(38f, 34f));
-            addButton.onClick.AddListener(ShowAddPanel);
+            _addButton.onClick.AddListener(ShowAddPanel);
 
-            var closeButton = CreateButton(
+            _closeButton = CreateButton(
                 "CloseButton",
                 _panelRect,
                 "×",
                 24,
                 new Color(0.18f, 0.08f, 0.08f, 1f));
             SetRect(
-                closeButton.GetComponent<RectTransform>(),
+                _closeButton.GetComponent<RectTransform>(),
                 Vector2.one,
                 Vector2.one,
                 Vector2.one,
                 new Vector2(-18f, -16f),
                 new Vector2(38f, 34f));
-            closeButton.onClick.AddListener(
+            _closeButton.onClick.AddListener(
                 () => CloseRequested?.Invoke());
         }
 
@@ -1122,12 +1196,12 @@ namespace Trpg.UI.Inventory
                 typeof(CanvasRenderer),
                 typeof(Image),
                 typeof(RectMask2D));
-            var viewportRect = viewportObject.GetComponent<RectTransform>();
-            viewportRect.SetParent(_panelRect, false);
-            viewportRect.anchorMin = Vector2.zero;
-            viewportRect.anchorMax = Vector2.one;
-            viewportRect.offsetMin = new Vector2(18f, 18f);
-            viewportRect.offsetMax = new Vector2(-18f, -70f);
+            _viewportRect = viewportObject.GetComponent<RectTransform>();
+            _viewportRect.SetParent(_panelRect, false);
+            _viewportRect.anchorMin = Vector2.zero;
+            _viewportRect.anchorMax = Vector2.one;
+            _viewportRect.offsetMin = new Vector2(18f, 18f);
+            _viewportRect.offsetMax = new Vector2(-18f, -70f);
             viewportObject.GetComponent<Image>().color =
                 new Color(0.02f, 0.03f, 0.04f, 0.94f);
 
@@ -1137,7 +1211,7 @@ namespace Trpg.UI.Inventory
                 typeof(GridLayoutGroup),
                 typeof(ContentSizeFitter));
             _contentRect = contentObject.GetComponent<RectTransform>();
-            _contentRect.SetParent(viewportRect, false);
+            _contentRect.SetParent(_viewportRect, false);
             _contentRect.anchorMin = new Vector2(0f, 1f);
             _contentRect.anchorMax = new Vector2(1f, 1f);
             _contentRect.pivot = new Vector2(0.5f, 1f);
@@ -1159,7 +1233,7 @@ namespace Trpg.UI.Inventory
             fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
 
             var scroll = viewportObject.AddComponent<ScrollRect>();
-            scroll.viewport = viewportRect;
+            scroll.viewport = _viewportRect;
             scroll.content = _contentRect;
             scroll.horizontal = false;
             scroll.vertical = true;
@@ -1168,7 +1242,7 @@ namespace Trpg.UI.Inventory
 
             _emptyText = CreateText(
                 "EmptyText",
-                viewportRect,
+                _viewportRect,
                 "보유한 아이템이 없습니다.\n우측 상단 + 버튼으로 추가하십시오.",
                 17,
                 TextAnchor.MiddleCenter);
@@ -1847,6 +1921,9 @@ namespace Trpg.UI.Inventory
 
         private void BeginWindowDrag(BaseEventData eventData)
         {
+            if (_isEmbedded)
+                return;
+
             var pointer = eventData as PointerEventData;
             if (pointer == null ||
                 pointer.button != PointerEventData.InputButton.Left)
@@ -1861,7 +1938,7 @@ namespace Trpg.UI.Inventory
 
         private void DragWindow(BaseEventData eventData)
         {
-            if (!_isWindowDragging)
+            if (_isEmbedded || !_isWindowDragging)
                 return;
 
             var pointer = eventData as PointerEventData;
@@ -1891,6 +1968,88 @@ namespace Trpg.UI.Inventory
         private void EndWindowDrag(BaseEventData eventData)
         {
             _isWindowDragging = false;
+        }
+
+        private void ApplyEmbeddedLayout()
+        {
+            if (_windowDragHandle != null)
+                _windowDragHandle.gameObject.SetActive(false);
+            if (_titleText != null)
+                _titleText.gameObject.SetActive(false);
+            if (_closeButton != null)
+                _closeButton.gameObject.SetActive(false);
+            if (_weightText != null)
+            {
+                SetRect(
+                    _weightText.rectTransform,
+                    new Vector2(0f, 1f),
+                    new Vector2(0f, 1f),
+                    new Vector2(0f, 1f),
+                    new Vector2(16f, -10f),
+                    new Vector2(220f, 36f));
+            }
+            if (_addButton != null)
+            {
+                SetRect(
+                    _addButton.transform as RectTransform,
+                    Vector2.one,
+                    Vector2.one,
+                    Vector2.one,
+                    new Vector2(-16f, -10f),
+                    new Vector2(42f, 36f));
+            }
+            if (_viewportRect != null)
+            {
+                _viewportRect.offsetMin = new Vector2(16f, 16f);
+                _viewportRect.offsetMax = new Vector2(-16f, -54f);
+            }
+        }
+
+        private void ApplyFloatingLayout()
+        {
+            if (_windowDragHandle != null)
+                _windowDragHandle.gameObject.SetActive(true);
+            if (_titleText != null)
+                _titleText.gameObject.SetActive(true);
+            if (_closeButton != null)
+                _closeButton.gameObject.SetActive(true);
+            if (_weightText != null)
+            {
+                SetRect(
+                    _weightText.rectTransform,
+                    new Vector2(0f, 1f),
+                    new Vector2(0f, 1f),
+                    new Vector2(0f, 1f),
+                    new Vector2(18f, -16f),
+                    new Vector2(180f, 34f));
+            }
+            if (_addButton != null)
+            {
+                SetRect(
+                    _addButton.transform as RectTransform,
+                    Vector2.one,
+                    Vector2.one,
+                    Vector2.one,
+                    new Vector2(-62f, -16f),
+                    new Vector2(38f, 34f));
+            }
+            if (_viewportRect != null)
+            {
+                _viewportRect.offsetMin = new Vector2(18f, 18f);
+                _viewportRect.offsetMax = new Vector2(-18f, -70f);
+            }
+        }
+
+        private static void StretchRect(RectTransform rect)
+        {
+            if (rect == null)
+                return;
+            rect.anchorMin = Vector2.zero;
+            rect.anchorMax = Vector2.one;
+            rect.pivot = new Vector2(0.5f, 0.5f);
+            rect.offsetMin = Vector2.zero;
+            rect.offsetMax = Vector2.zero;
+            rect.localScale = Vector3.one;
         }
 
         private void PositionAboveAnchor(RectTransform anchorRect)

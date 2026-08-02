@@ -58,10 +58,77 @@ namespace Trpg.Pawns
         private PlayerStatState _resourceState;
         private Coroutine _resourceRefreshRoutine;
         private Vector2Int _lastConfiguredScreenSize;
+        private BoardUiStackManager _boardStackManager;
 
         public event Action SessionClosed;
+        public event Action<PawnCheckSourceData> SourceChanged;
+        public event Action<PawnCheckDifficulty> DifficultyChanged;
 
         public bool IsOpen => _isOpen;
+        public bool IsBoardStackMode => _boardStackManager != null;
+        public PawnCheckSourceData CurrentSource => _source;
+        public PawnCheckDifficulty CurrentDifficulty => _difficulty;
+
+        public void RegisterBoardStack(BoardUiStackManager manager)
+        {
+            _boardStackManager = manager;
+            if (_boardStackManager != null)
+            {
+                _overlay?.Hide();
+                if (_overlayDragHandle != null)
+                    _overlayDragHandle.enabled = false;
+            }
+        }
+
+        public void UnregisterBoardStack(BoardUiStackManager manager)
+        {
+            if (_boardStackManager != manager)
+                return;
+            _boardStackManager = null;
+            if (_overlayDragHandle != null)
+                _overlayDragHandle.enabled = true;
+        }
+
+        public bool OpenFromBoardStack(PlayerStatState statState)
+        {
+            return Open(statState);
+        }
+
+        public bool SelectSourceFromBoardStack(PawnCheckSourceData source)
+        {
+            if (!_isOpen && !Open(ResolveStatState(
+                    _pawnManager != null
+                        ? _pawnManager.SelectedInteractive
+                        : null)))
+            {
+                return false;
+            }
+
+            HandleSourceSelected(source);
+            return _hasSource;
+        }
+
+        public void SetDifficultyFromBoardStack(
+            PawnCheckDifficulty difficulty)
+        {
+            if (!_isOpen || !_hasSource)
+                return;
+            _difficulty = difficulty;
+            DifficultyChanged?.Invoke(difficulty);
+        }
+
+        public bool RollFromBoardStack()
+        {
+            if (!_isOpen || !_hasSource || _rollService == null ||
+                _sessionState == null ||
+                _sessionState.Phase == PawnCheckRollSessionPhase.Rolling)
+            {
+                return false;
+            }
+
+            ExecuteCheckRoll(isChallenge: false);
+            return true;
+        }
 
         [RuntimeInitializeOnLoadMethod(
             RuntimeInitializeLoadType.AfterSceneLoad)]
@@ -190,10 +257,23 @@ namespace Trpg.Pawns
             _isOpen = true;
 
             HideLegacyManualTargetInput();
-            ExpandExistingStatPanel();
-            ConfigureExistingStatPanelInteraction();
             BindResourceState(pawn);
             RefreshResourceBarWithLuck(pawn);
+
+            if (_boardStackManager != null)
+            {
+                _overlay?.Hide();
+                if (_sessionState.HasSource)
+                {
+                    _source = _sessionState.Source;
+                    _hasSource = _source.IsValid;
+                    SourceChanged?.Invoke(_source);
+                }
+                return true;
+            }
+
+            ExpandExistingStatPanel();
+            ConfigureExistingStatPanelInteraction();
             _overlay.OpenWaiting();
             ApplyStoredWindowPositions();
             RestoreSessionUi();
@@ -459,6 +539,12 @@ namespace Trpg.Pawns
             var pawn = _pawnManager != null
                 ? _pawnManager.SelectedInteractive
                 : null;
+            if (_boardStackManager != null)
+            {
+                _boardStackManager.RequestCheckRoll();
+                return;
+            }
+
             Open(ResolveStatState(pawn));
         }
 
@@ -687,23 +773,24 @@ namespace Trpg.Pawns
             var ownerPawn = _currentPawn;
             ownerState.RecordPureRoll(data);
             SaveCurrentWindowPositions();
+            PawnRollLogService.RecordRoll(
+                PawnRollLogKind.PureD100,
+                ownerPawn,
+                "순수 D100",
+                "d100",
+                roll,
+                $"결과 {roll}",
+                "목표값 없음");
 
-            _overlay.Hide();
+            if (_boardStackManager == null)
+                _overlay.Hide();
             _resultWindow.Play(data, () =>
             {
-                PawnRollLogService.RecordRoll(
-                    PawnRollLogKind.PureD100,
-                    ownerPawn,
-                    "순수 D100",
-                    "d100",
-                    roll,
-                    $"결과 {roll}",
-                    "목표값 없음");
                 ownerState.MarkFinalized();
                 if (_isOpen && _sessionState == ownerState)
                 {
                     _resultWindow.HideFailureActions();
-                    _overlay.ShowStatusOnly(
+                    ShowSessionStatus(
                         "순수 D100 결과가 캐릭터에 저장되었습니다.");
                 }
             });
@@ -720,7 +807,9 @@ namespace Trpg.Pawns
             _challengeUsed = false;
             _evaluation = default;
             _sessionState.SelectSource(source);
-            _overlay.BindSource(_source);
+            if (_boardStackManager == null)
+                _overlay.BindSource(_source);
+            SourceChanged?.Invoke(_source);
             _resultWindow?.Hide();
         }
 
@@ -735,7 +824,9 @@ namespace Trpg.Pawns
             _hasSource = false;
             _challengeUsed = false;
             _sessionState.ClearSource();
-            _overlay.ClearSource();
+            if (_boardStackManager == null)
+                _overlay.ClearSource();
+            SourceChanged?.Invoke(default);
             _resultWindow?.Hide();
         }
 
@@ -750,6 +841,7 @@ namespace Trpg.Pawns
             }
 
             _difficulty = difficulty;
+            DifficultyChanged?.Invoke(difficulty);
             ExecuteCheckRoll(isChallenge: false);
         }
 
@@ -792,36 +884,26 @@ namespace Trpg.Pawns
                 isChallenge,
                 data);
             SaveCurrentWindowPositions();
-
-            var logKind = isChallenge
-                ? PawnRollLogKind.Challenge
-                : PawnRollLogKind.Check;
-            var logTitle = isChallenge
-                ? "대항 판정"
-                : "판정 굴림";
-            var logExpression =
+            PawnRollLogService.RecordRoll(
+                isChallenge
+                    ? PawnRollLogKind.Challenge
+                    : PawnRollLogKind.Check,
+                ownerPawn,
+                isChallenge ? "대항 판정" : "판정 굴림",
                 $"{_source.DisplayName} {difficultyLabel} " +
-                $"(목표 {evaluation.RequiredTarget})";
-            var logDetail = $"판정 단계 {gradeLabel}";
+                $"(목표 {evaluation.RequiredTarget})",
+                roll,
+                successLabel,
+                $"판정 단계 {gradeLabel}");
 
-            _overlay.Hide();
+            if (_boardStackManager == null)
+                _overlay.Hide();
             _resultWindow.Play(
                 data,
-                () =>
-                {
-                    PawnRollLogService.RecordRoll(
-                        logKind,
-                        ownerPawn,
-                        logTitle,
-                        logExpression,
-                        roll,
-                        successLabel,
-                        logDetail);
-                    HandleCheckPresentationCompleted(
-                        ownerState,
-                        evaluation,
-                        isChallenge);
-                });
+                () => HandleCheckPresentationCompleted(
+                    ownerState,
+                    evaluation,
+                    isChallenge));
         }
 
         private void HandleCheckPresentationCompleted(
@@ -838,7 +920,7 @@ namespace Trpg.Pawns
                 if (_isOpen && _sessionState == ownerState)
                 {
                     _resultWindow.HideFailureActions();
-                    _overlay.ShowStatusOnly(
+                    ShowSessionStatus(
                         "판정 결과가 캐릭터에 저장되었습니다.");
                 }
                 return;
@@ -851,7 +933,7 @@ namespace Trpg.Pawns
                 if (_isOpen && _sessionState == ownerState)
                 {
                     _resultWindow.HideFailureActions();
-                    _overlay.ShowStatusOnly(
+                    ShowSessionStatus(
                         isChallenge
                             ? "대항 판정 결과가 캐릭터에 저장되었습니다."
                             : "대실패 결과가 캐릭터에 저장되었습니다.");
@@ -870,7 +952,7 @@ namespace Trpg.Pawns
                 evaluation.CanChallenge,
                 evaluation.CanSpendLuck &&
                 currentLuck >= evaluation.LuckCost);
-            _overlay.ShowStatusOnly(
+            ShowSessionStatus(
                 "실패했습니다. 결과창 하단에서 후속 행동을 선택하세요.");
         }
 
@@ -882,7 +964,7 @@ namespace Trpg.Pawns
             if (_isOpen)
             {
                 _resultWindow?.HideFailureActions();
-                _overlay.ShowStatusOnly(
+                ShowSessionStatus(
                     "현재 결과를 확정했습니다. 턴 리셋까지 캐릭터에 저장됩니다.");
             }
         }
@@ -1010,7 +1092,7 @@ namespace Trpg.Pawns
                 "운 사용으로 성공",
                 $"운 {cost} 사용 / 남은 운 {remaining}");
             _resultWindow.ShowLuckApplied(luckPresentation);
-            _overlay.ShowStatusOnly(
+            ShowSessionStatus(
                 "운을 사용해 판정을 성공으로 확정했습니다.");
             ScheduleResourceRefresh(_currentPawn);
         }
@@ -1076,7 +1158,11 @@ namespace Trpg.Pawns
                 return;
 
             if (_sessionState.HasSource)
-                _overlay.BindSource(_sessionState.Source);
+            {
+                if (_boardStackManager == null)
+                    _overlay.BindSource(_sessionState.Source);
+                SourceChanged?.Invoke(_sessionState.Source);
+            }
 
             if (_sessionState.HasLastPresentation)
             {
@@ -1109,7 +1195,7 @@ namespace Trpg.Pawns
                     evaluation.CanSpendLuck &&
                     !_sessionState.ChallengeUsed &&
                     currentLuck >= evaluation.LuckCost);
-                _overlay.ShowStatusOnly(
+                ShowSessionStatus(
                     "실패했습니다. 결과창 하단에서 후속 행동을 선택하세요.");
             }
             else if (_sessionState.Phase ==
@@ -1117,7 +1203,7 @@ namespace Trpg.Pawns
                      _sessionState.HasLastPresentation)
             {
                 _resultWindow.HideFailureActions();
-                _overlay.ShowStatusOnly(
+                ShowSessionStatus(
                     "저장된 판정 결과입니다. 턴 리셋 시 초기화됩니다.");
             }
         }
@@ -1167,7 +1253,7 @@ namespace Trpg.Pawns
                     evaluation.CanSpendLuck &&
                     !_sessionState.ChallengeUsed &&
                     currentLuck >= evaluation.LuckCost);
-                _overlay.ShowStatusOnly(
+                ShowSessionStatus(
                     "실패했습니다. 결과창 하단에서 후속 행동을 선택하세요.");
                 return;
             }
@@ -1176,7 +1262,7 @@ namespace Trpg.Pawns
                 PawnCheckRollSessionPhase.Finalized)
             {
                 _resultWindow.HideFailureActions();
-                _overlay.ShowStatusOnly(
+                ShowSessionStatus(
                     "판정 결과가 캐릭터에 저장되었습니다. " +
                     "턴 리셋 시 초기화됩니다.");
             }
@@ -1730,6 +1816,12 @@ namespace Trpg.Pawns
 
             StopCoroutine(_integrationRoutine);
             _integrationRoutine = null;
+        }
+
+        private void ShowSessionStatus(string message)
+        {
+            if (_boardStackManager == null)
+                _overlay?.ShowStatusOnly(message);
         }
 
         private void OnDestroy()

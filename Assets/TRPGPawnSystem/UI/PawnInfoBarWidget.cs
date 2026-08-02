@@ -86,9 +86,15 @@ namespace Trpg.Pawns
         private Image _moveButtonImage;
         private Button _inventoryButton;
         private RectTransform _inventoryButtonRect;
+        private Button _portraitButton;
         private bool _isApplyingCompactLayout;
         private bool _hasCompactLayout;
         private float _hiddenPadding;
+        private bool _boardStackMode;
+        private bool _hasBoardStackInfo;
+        private bool _hasBoardStackStats;
+        private PawnInfoBarData _boardStackInfo;
+        private PawnStatPanelData _boardStackStats;
 
         public event Action CloseRequested;
         public event Action MoveRequested;
@@ -111,6 +117,25 @@ namespace Trpg.Pawns
             PlayerSkillRemoveRequested;
         public event Action PlayerHudRequested;
         public event Action InventoryRequested;
+        public event Action ProfileRequested;
+        public event Action BoardStackStatsRequested;
+        public event Action BoardStackBagRequested;
+        public event Action BoardStackProfileRequested;
+        public event Action<PawnInfoBarData> BoardStackInfoChanged;
+        public event Action<PawnStatPanelData> BoardStackStatsChanged;
+        public event Action<float, float> BoardStackMovementChanged;
+        public event Action BoardStackUnbound;
+
+        public RectTransform PortraitAnchorRect
+        {
+            get
+            {
+                EnsurePortraitButton();
+                return _portraitImage != null
+                    ? _portraitImage.rectTransform
+                    : null;
+            }
+        }
 
         public RectTransform InventoryAnchorRect
         {
@@ -119,6 +144,38 @@ namespace Trpg.Pawns
                 EnsureInventoryButton();
                 return _inventoryButtonRect;
             }
+        }
+
+        public RectTransform FullCanvasRect => _canvasRect;
+        public RectTransform PanelRect => _panel;
+        public RectTransform PortraitRect =>
+            _portraitImage != null ? _portraitImage.rectTransform : null;
+        public Font UiFont => _nameText != null ? _nameText.font : null;
+        public bool IsBoardStackMode => _boardStackMode;
+        public bool HasBoardStackInfo => _hasBoardStackInfo;
+        public bool HasBoardStackStats => _hasBoardStackStats;
+        public PawnInfoBarData BoardStackInfo => _boardStackInfo;
+        public PawnStatPanelData BoardStackStats => _boardStackStats;
+        public PawnStatPanelWidget BoardStackStatPanel
+        {
+            get
+            {
+                EnsureStatPanel();
+                return _statPanel;
+            }
+        }
+
+        public void SetBoardStackMode(bool enabled)
+        {
+            _boardStackMode = enabled;
+            if (enabled)
+                _statPanel?.SetExpanded(false);
+            RefreshStatToggleVisual();
+        }
+
+        public void RequestBoardStackMove()
+        {
+            MoveRequested?.Invoke();
         }
 
         public static PawnInfoBarWidget CreateRuntime(
@@ -132,6 +189,11 @@ namespace Trpg.Pawns
             _descriptionText.text = data.Description;
             _portraitImage.sprite = data.Portrait;
             _portraitImage.enabled = data.Portrait != null;
+            _boardStackInfo = data;
+            _hasBoardStackInfo = true;
+            BoardStackInfoChanged?.Invoke(data);
+            EnsurePortraitButton();
+            BindPortraitButton();
             EnsureInventoryButton();
             BindInventoryButton();
             SetInventoryButtonEnabled(true);
@@ -148,6 +210,10 @@ namespace Trpg.Pawns
         }
         public void Unbind()
         {
+            _hasBoardStackInfo = false;
+            _hasBoardStackStats = false;
+            BoardStackUnbound?.Invoke();
+            SetProfileButtonEnabled(false);
             SetInventoryButtonEnabled(false);
             Hide();
             _nameText.text = string.Empty;
@@ -163,6 +229,9 @@ namespace Trpg.Pawns
         }
         public void SetStats(in PawnStatPanelData data)
         {
+            _boardStackStats = data;
+            _hasBoardStackStats = true;
+            BoardStackStatsChanged?.Invoke(data);
             SetResourceStats(data.Resources);
             SetPlayerStats(data);
         }
@@ -196,6 +265,7 @@ namespace Trpg.Pawns
         }
         public void ClearPlayerStats()
         {
+            _hasBoardStackStats = false;
             _statPanel?.Clear();
             if (_statToggleButton != null)
             {
@@ -275,6 +345,9 @@ namespace Trpg.Pawns
             _remainingMovementMeters = remainingMeters;
             _maximumMovementMeters = maximumMeters;
             _hasMovementBudget = true;
+            BoardStackMovementChanged?.Invoke(
+                remainingMeters,
+                maximumMeters);
             RefreshMovementText();
         }
         public void SetMovementRange(
@@ -420,6 +493,9 @@ namespace Trpg.Pawns
             ClearBoardOverlay();
             EnsureMoveButton();
             BindMoveButton();
+            EnsurePortraitButton();
+            BindPortraitButton();
+            SetProfileButtonEnabled(false);
             EnsureInventoryButton();
             BindInventoryButton();
             SetInventoryButtonEnabled(false);
@@ -466,6 +542,8 @@ namespace Trpg.Pawns
             EnsureBoardOverlay();
             EnsureMoveButton();
             BindMoveButton();
+            EnsurePortraitButton();
+            BindPortraitButton();
             EnsureInventoryButton();
             BindInventoryButton();
             BindCloseButton();
@@ -492,6 +570,7 @@ namespace Trpg.Pawns
         private void OnDisable()
         {
             UnbindMoveButton();
+            UnbindPortraitButton();
             UnbindInventoryButton();
             UnbindCloseButton();
             UnbindRollWidget();
@@ -507,6 +586,7 @@ namespace Trpg.Pawns
         private void OnDestroy()
         {
             UnbindMoveButton();
+            UnbindPortraitButton();
             UnbindInventoryButton();
             UnbindCloseButton();
             UnbindRollWidget();
@@ -535,24 +615,80 @@ namespace Trpg.Pawns
             PlayerSkillRemoveRequested = null;
             PlayerHudRequested = null;
             InventoryRequested = null;
+            ProfileRequested = null;
+            BoardStackStatsRequested = null;
+            BoardStackBagRequested = null;
+            BoardStackProfileRequested = null;
+            BoardStackInfoChanged = null;
+            BoardStackStatsChanged = null;
+            BoardStackMovementChanged = null;
+            BoardStackUnbound = null;
+        }
+
+        private void EnsurePortraitButton()
+        {
+            if (_portraitImage == null)
+                return;
+
+            if (_portraitButton == null)
+            {
+                _portraitButton =
+                    _portraitImage.GetComponent<Button>();
+                if (_portraitButton == null)
+                {
+                    _portraitButton =
+                        _portraitImage.gameObject.AddComponent<Button>();
+                }
+            }
+
+            _portraitImage.raycastTarget = true;
+            _portraitButton.targetGraphic = _portraitImage;
+            _portraitButton.transition =
+                Selectable.Transition.ColorTint;
+        }
+
+        private void BindPortraitButton()
+        {
+            if (_portraitButton == null)
+                return;
+
+            _portraitButton.onClick.RemoveListener(
+                HandlePortraitClicked);
+            _portraitButton.onClick.AddListener(
+                HandlePortraitClicked);
+        }
+
+        private void UnbindPortraitButton()
+        {
+            if (_portraitButton != null)
+            {
+                _portraitButton.onClick.RemoveListener(
+                    HandlePortraitClicked);
+            }
+        }
+
+        public void SetProfileButtonEnabled(bool enabled)
+        {
+            EnsurePortraitButton();
+            if (_portraitButton != null)
+                _portraitButton.interactable = enabled;
+        }
+
+        private void HandlePortraitClicked()
+        {
+            if (_boardStackMode)
+            {
+                BoardStackProfileRequested?.Invoke();
+                return;
+            }
+
+            ProfileRequested?.Invoke();
         }
 
         private void EnsureInventoryButton()
         {
             if (_inventoryButton != null || _panel == null)
                 return;
-
-            if (_portraitImage != null)
-            {
-                _portraitImage.raycastTarget = false;
-                var oldPortraitButton =
-                    _portraitImage.GetComponent<Button>();
-                if (oldPortraitButton != null)
-                {
-                    oldPortraitButton.onClick.RemoveAllListeners();
-                    oldPortraitButton.interactable = false;
-                }
-            }
 
             var buttonObject = new GameObject(
                 "InventoryButton",
@@ -630,6 +766,12 @@ namespace Trpg.Pawns
 
         private void HandleInventoryClicked()
         {
+            if (_boardStackMode)
+            {
+                BoardStackBagRequested?.Invoke();
+                return;
+            }
+
             InventoryRequested?.Invoke();
         }
 
@@ -740,14 +882,9 @@ namespace Trpg.Pawns
                 return;
             }
 
-            var modeLabel = _isMovementModeActive
-                ? "걷기 중"
-                : "걷기";
             _movementText.text = _hasMovementBudget
-                ? $"{modeLabel} {_movementScore}\n" +
-                  $"{_remainingMovementMeters:0.0}/" +
-                  $"{_maximumMovementMeters:0.0}m"
-                : $"{modeLabel}\n{_movementScore}";
+                ? $"이동 {_remainingMovementMeters:0.0}m 남음"
+                : "이동";
         }
 
         private void BindCloseButton()
@@ -1101,6 +1238,7 @@ namespace Trpg.Pawns
                     Vector2.one * PortraitLayoutSize;
             }
 
+            EnsurePortraitButton();
             EnsureInventoryButton();
             ApplyInventoryButtonLayout();
 
@@ -1357,6 +1495,12 @@ namespace Trpg.Pawns
 
         private void HandleStatToggleClicked()
         {
+            if (_boardStackMode)
+            {
+                BoardStackStatsRequested?.Invoke();
+                return;
+            }
+
             _statPanel?.ToggleExpanded();
         }
 
@@ -1371,7 +1515,9 @@ namespace Trpg.Pawns
                 return;
 
             _statToggleGraphic.color =
-                _statPanel != null && _statPanel.IsExpanded
+                !_boardStackMode &&
+                _statPanel != null &&
+                _statPanel.IsExpanded
                     ? new Color(0.08f, 0.48f, 0.60f, 0.99f)
                     : new Color(0.07f, 0.20f, 0.24f, 0.98f);
         }
