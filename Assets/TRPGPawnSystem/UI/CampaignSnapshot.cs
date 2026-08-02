@@ -4,7 +4,6 @@ using Trpg.Domain.Dice;
 using Trpg.Domain.Stats;
 using Trpg.UI.Handouts;
 using Trpg.UI.Inventory;
-using Trpg.UI.Profile;
 using Trpg.UI.Skills;
 
 namespace Trpg.Save
@@ -38,6 +37,5 @@ namespace Trpg.Save
         public StatRuntimeSnapshot Stats;
         public SkillRuntimeSnapshot Skills;
         public InventoryRuntimeSnapshot Inventory;
-        public PawnProfileRuntimeSnapshot Profile;
     }
 }

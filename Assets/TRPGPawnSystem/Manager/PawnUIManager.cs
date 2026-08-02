@@ -5,7 +5,6 @@ using Trpg.Data.Inventory;
 using Trpg.Domain.Stats;
 using Trpg.UI.Handouts;
 using Trpg.UI.Inventory;
-using Trpg.UI.Profile;
 using Trpg.UI.Skills;
 using Trpg.UI.Stats;
 using UnityEngine;
@@ -97,8 +96,6 @@ namespace Trpg.Pawns
         private PlayerSkillState _boundSkillState;
         private PlayerInventoryState _boundInventoryState;
         private PawnInventoryWidget _inventoryWidget;
-        private PawnProfileState _boundProfileState;
-        private PawnProfileWidget _profileWidget;
         private PublicHandoutState _publicHandoutState;
         private PublicHandoutWidget _handoutWidget;
         private Button _handoutButton;
@@ -165,8 +162,6 @@ namespace Trpg.Pawns
                 HandleSkillRemoveRequested;
             _infoBar.InventoryRequested +=
                 HandleInventoryRequested;
-            _infoBar.ProfileRequested +=
-                HandleProfileRequested;
 
             BindHandoutSystem();
             BindWalkButton();
@@ -208,8 +203,6 @@ namespace Trpg.Pawns
                     HandleSkillRemoveRequested;
                 _infoBar.InventoryRequested -=
                     HandleInventoryRequested;
-                _infoBar.ProfileRequested -=
-                    HandleProfileRequested;
                 _infoBar.Hide();
             }
 
@@ -217,8 +210,6 @@ namespace Trpg.Pawns
             UnbindSkillState();
             UnbindInventoryState();
             _inventoryWidget?.Hide();
-            UnbindProfileState();
-            _profileWidget?.Hide();
             UnbindHandoutSystem();
             _handoutWidget?.Hide();
             if (_handoutButton != null)
@@ -234,12 +225,6 @@ namespace Trpg.Pawns
             {
                 Destroy(_inventoryWidget.gameObject);
                 _inventoryWidget = null;
-            }
-
-            if (_profileWidget != null)
-            {
-                Destroy(_profileWidget.gameObject);
-                _profileWidget = null;
             }
 
             if (_handoutWidget != null)
@@ -259,7 +244,6 @@ namespace Trpg.Pawns
         private void HandleCloseRequested()
         {
             _inventoryWidget?.Hide();
-            _profileWidget?.Hide();
             _pawnManager.ClearSelection();
         }
 
@@ -270,8 +254,6 @@ namespace Trpg.Pawns
             UnbindSkillState();
             UnbindInventoryState();
             _inventoryWidget?.Hide();
-            UnbindProfileState();
-            _profileWidget?.Hide();
 
             if (pawn == null || pawn.Definition == null)
             {
@@ -296,7 +278,6 @@ namespace Trpg.Pawns
                 definition.MovementScore);
 
             _infoBar.Bind(infoData);
-            _infoBar.SetProfileButtonEnabled(IsPlayerPawn(pawn));
 
             var statState = ResolveStatState(pawn);
             if (statState != null)
@@ -321,14 +302,6 @@ namespace Trpg.Pawns
                     pawn.gameObject,
                     definition,
                     _itemCatalog));
-
-            if (IsPlayerPawn(pawn))
-            {
-                BindProfileState(
-                    PawnProfileState.ResolveOrCreate(
-                        pawn.gameObject,
-                        definition));
-            }
 
             RefreshMovementBudget(pawn);
             RefreshWalkButton(pawn);
@@ -464,43 +437,6 @@ namespace Trpg.Pawns
             }
 
             _boundInventoryState = null;
-        }
-
-        private void BindProfileState(PawnProfileState profileState)
-        {
-            if (profileState == null)
-                return;
-
-            if (!profileState.IsInitialized)
-                profileState.Initialize();
-            if (!profileState.IsInitialized)
-                return;
-
-            _boundProfileState = profileState;
-            _boundProfileState.Changed -=
-                HandleBoundProfileStateChanged;
-            _boundProfileState.Changed +=
-                HandleBoundProfileStateChanged;
-        }
-
-        private void UnbindProfileState()
-        {
-            if (_boundProfileState != null)
-            {
-                _boundProfileState.Changed -=
-                    HandleBoundProfileStateChanged;
-            }
-
-            _boundProfileState = null;
-        }
-
-        private void HandleBoundProfileStateChanged()
-        {
-            if (_profileWidget != null &&
-                _profileWidget.IsVisible)
-            {
-                _profileWidget.RefreshFromState();
-            }
         }
 
         private void HandleBoundInventoryStateChanged()
@@ -825,63 +761,6 @@ namespace Trpg.Pawns
                 _handoutCatalog);
         }
 
-        private void HandleProfileRequested()
-        {
-            if (_boundProfileState == null)
-                return;
-
-            EnsureProfileWidget();
-            if (_profileWidget == null)
-                return;
-
-            if (_profileWidget.IsVisible)
-            {
-                _profileWidget.Hide();
-                return;
-            }
-
-            _profileWidget.Bind(
-                _boundProfileState,
-                _boundDisplayName);
-            _profileWidget.Show(_infoBar.PortraitAnchorRect);
-        }
-
-        private void EnsureProfileWidget()
-        {
-            if (_profileWidget != null || _infoBar == null)
-                return;
-
-            var canvas = _infoBar.GetComponentInParent<Canvas>();
-            var rootCanvas = canvas != null ? canvas.rootCanvas : null;
-            if (rootCanvas == null)
-            {
-                Debug.LogError(
-                    $"[{name}] 플레이어 정보 UI를 생성할 Root Canvas를 " +
-                    "찾지 못했습니다.",
-                    this);
-                return;
-            }
-
-            var text = _infoBar.GetComponentInChildren<Text>(true);
-            _profileWidget = PawnProfileWidget.CreateRuntime(
-                rootCanvas,
-                text != null ? text.font : null);
-            _profileWidget.CloseRequested +=
-                HandleProfileCloseRequested;
-            _profileWidget.Applied +=
-                HandleProfileApplied;
-        }
-
-        private void HandleProfileCloseRequested()
-        {
-            _profileWidget?.Hide();
-        }
-
-        private void HandleProfileApplied()
-        {
-            // PawnProfileState가 직접 변경 이벤트를 발행합니다.
-        }
-
         private void HandleInventoryRequested()
         {
             if (_boundInventoryState == null)
@@ -1021,14 +900,6 @@ namespace Trpg.Pawns
                 capacity,
                 _itemCatalog,
                 _inventoryIconSet);
-        }
-
-        private static bool IsPlayerPawn(InteractivePawn pawn)
-        {
-            var definition = pawn != null ? pawn.Definition : null;
-            return definition != null &&
-                   definition.Kind == InteractivePawnKind.Moveable &&
-                   definition.MoveableKind == MoveablePawnKind.Player;
         }
 
         private void RefreshStatUi()

@@ -86,7 +86,6 @@ namespace Trpg.Pawns
         private Image _moveButtonImage;
         private Button _inventoryButton;
         private RectTransform _inventoryButtonRect;
-        private Button _portraitButton;
         private bool _isApplyingCompactLayout;
         private bool _hasCompactLayout;
         private float _hiddenPadding;
@@ -112,18 +111,6 @@ namespace Trpg.Pawns
             PlayerSkillRemoveRequested;
         public event Action PlayerHudRequested;
         public event Action InventoryRequested;
-        public event Action ProfileRequested;
-
-        public RectTransform PortraitAnchorRect
-        {
-            get
-            {
-                EnsurePortraitButton();
-                return _portraitImage != null
-                    ? _portraitImage.rectTransform
-                    : null;
-            }
-        }
 
         public RectTransform InventoryAnchorRect
         {
@@ -145,8 +132,6 @@ namespace Trpg.Pawns
             _descriptionText.text = data.Description;
             _portraitImage.sprite = data.Portrait;
             _portraitImage.enabled = data.Portrait != null;
-            EnsurePortraitButton();
-            BindPortraitButton();
             EnsureInventoryButton();
             BindInventoryButton();
             SetInventoryButtonEnabled(true);
@@ -163,7 +148,6 @@ namespace Trpg.Pawns
         }
         public void Unbind()
         {
-            SetProfileButtonEnabled(false);
             SetInventoryButtonEnabled(false);
             Hide();
             _nameText.text = string.Empty;
@@ -436,9 +420,6 @@ namespace Trpg.Pawns
             ClearBoardOverlay();
             EnsureMoveButton();
             BindMoveButton();
-            EnsurePortraitButton();
-            BindPortraitButton();
-            SetProfileButtonEnabled(false);
             EnsureInventoryButton();
             BindInventoryButton();
             SetInventoryButtonEnabled(false);
@@ -485,8 +466,6 @@ namespace Trpg.Pawns
             EnsureBoardOverlay();
             EnsureMoveButton();
             BindMoveButton();
-            EnsurePortraitButton();
-            BindPortraitButton();
             EnsureInventoryButton();
             BindInventoryButton();
             BindCloseButton();
@@ -513,7 +492,6 @@ namespace Trpg.Pawns
         private void OnDisable()
         {
             UnbindMoveButton();
-            UnbindPortraitButton();
             UnbindInventoryButton();
             UnbindCloseButton();
             UnbindRollWidget();
@@ -529,7 +507,6 @@ namespace Trpg.Pawns
         private void OnDestroy()
         {
             UnbindMoveButton();
-            UnbindPortraitButton();
             UnbindInventoryButton();
             UnbindCloseButton();
             UnbindRollWidget();
@@ -558,67 +535,24 @@ namespace Trpg.Pawns
             PlayerSkillRemoveRequested = null;
             PlayerHudRequested = null;
             InventoryRequested = null;
-            ProfileRequested = null;
-        }
-
-        private void EnsurePortraitButton()
-        {
-            if (_portraitImage == null)
-                return;
-
-            if (_portraitButton == null)
-            {
-                _portraitButton =
-                    _portraitImage.GetComponent<Button>();
-                if (_portraitButton == null)
-                {
-                    _portraitButton =
-                        _portraitImage.gameObject.AddComponent<Button>();
-                }
-            }
-
-            _portraitImage.raycastTarget = true;
-            _portraitButton.targetGraphic = _portraitImage;
-            _portraitButton.transition =
-                Selectable.Transition.ColorTint;
-        }
-
-        private void BindPortraitButton()
-        {
-            if (_portraitButton == null)
-                return;
-
-            _portraitButton.onClick.RemoveListener(
-                HandlePortraitClicked);
-            _portraitButton.onClick.AddListener(
-                HandlePortraitClicked);
-        }
-
-        private void UnbindPortraitButton()
-        {
-            if (_portraitButton != null)
-            {
-                _portraitButton.onClick.RemoveListener(
-                    HandlePortraitClicked);
-            }
-        }
-
-        public void SetProfileButtonEnabled(bool enabled)
-        {
-            EnsurePortraitButton();
-            if (_portraitButton != null)
-                _portraitButton.interactable = enabled;
-        }
-
-        private void HandlePortraitClicked()
-        {
-            ProfileRequested?.Invoke();
         }
 
         private void EnsureInventoryButton()
         {
             if (_inventoryButton != null || _panel == null)
                 return;
+
+            if (_portraitImage != null)
+            {
+                _portraitImage.raycastTarget = false;
+                var oldPortraitButton =
+                    _portraitImage.GetComponent<Button>();
+                if (oldPortraitButton != null)
+                {
+                    oldPortraitButton.onClick.RemoveAllListeners();
+                    oldPortraitButton.interactable = false;
+                }
+            }
 
             var buttonObject = new GameObject(
                 "InventoryButton",
@@ -1167,7 +1101,6 @@ namespace Trpg.Pawns
                     Vector2.one * PortraitLayoutSize;
             }
 
-            EnsurePortraitButton();
             EnsureInventoryButton();
             ApplyInventoryButtonLayout();
 
