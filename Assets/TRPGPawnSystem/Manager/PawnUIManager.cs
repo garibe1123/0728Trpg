@@ -122,6 +122,9 @@ namespace Trpg.Pawns
         public string BoundDisplayName => _boundDisplayName;
         public Sprite BoundPortrait => _boundPortrait;
         public bool HasBoardStack => _boardStackManager != null;
+        public int EffectDiceCount => _effectDiceCount;
+        public int EffectDiceSides => _effectDiceSides;
+        public int EffectDiceModifier => _effectDiceModifier;
 
         public void RegisterBoardStack(BoardUiStackManager manager)
         {
@@ -490,6 +493,12 @@ namespace Trpg.Pawns
                 PawnRollService.MaximumDiceSides);
             _effectDiceModifier = modifier;
             RefreshRollButtons(_pawnManager.SelectedInteractive);
+        }
+
+        public void RollEffectFromBoardStack(
+            PawnEffectRollRequest request)
+        {
+            HandleEffectRollRequested(request);
         }
 
         private void BindStatState(
@@ -1656,6 +1665,18 @@ namespace Trpg.Pawns
                 return;
             }
 
+            _effectDiceCount = Mathf.Clamp(
+                request.DiceCount,
+                1,
+                PawnRollService.MaximumDiceCount);
+            _effectDiceSides = Mathf.Clamp(
+                request.DiceSides,
+                2,
+                PawnRollService.MaximumDiceSides);
+            _effectDiceModifier = Mathf.Clamp(
+                request.Modifier,
+                -999,
+                999);
             var result = _rollService.RollEffect(
                 _effectDiceCount,
                 _effectDiceSides,

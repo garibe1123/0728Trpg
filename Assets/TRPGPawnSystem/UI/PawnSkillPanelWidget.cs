@@ -132,6 +132,7 @@ namespace Trpg.Pawns
             public InputField RegularInput;
             public Text Hard;
             public Text Extreme;
+            public PawnRollSourceWidget RollSource;
             public Button RemoveButton;
             public string SkillId;
             public string BoundName;
@@ -147,14 +148,26 @@ namespace Trpg.Pawns
         private CanvasGroup _canvasGroup;
         private Text _emptyText;
         private Button _addButton;
+        private ScrollRect _scrollRect;
+        private Scrollbar _verticalScrollbar;
         private Font _font;
         private Sequence _transition;
         private Vector2 _shownPosition;
         private bool _isExpanded;
         private bool _canEdit;
         private int _usedVisualCount;
+        private bool _isEmbedded;
+        private Transform _legacyParent;
+        private Vector2 _legacyAnchorMin;
+        private Vector2 _legacyAnchorMax;
+        private Vector2 _legacyPivot;
+        private Vector2 _legacyAnchoredPosition;
+        private Vector2 _legacySizeDelta;
+        private Color _legacyBackgroundColor;
 
         public bool IsExpanded => _isExpanded;
+        public bool IsEmbedded => _isEmbedded;
+        public RectTransform RootRect => _rect;
         public event Action<PawnSkillAddRequest> AddRequested;
         public event Action<PawnSkillNameEditRequest>
             NameEditRequested;
@@ -231,6 +244,13 @@ namespace Trpg.Pawns
 
         public void SetExpanded(bool expanded, bool animate)
         {
+            if (_isEmbedded)
+            {
+                _isExpanded = true;
+                Show(false);
+                return;
+            }
+
             if (_isExpanded == expanded)
                 return;
 
@@ -239,6 +259,84 @@ namespace Trpg.Pawns
                 Show(animate);
             else
                 Hide(animate);
+        }
+
+        public void SetEmbeddedMode(
+            RectTransform host,
+            bool enabled)
+        {
+            if (_rect == null)
+                return;
+
+            if (enabled)
+            {
+                if (host == null)
+                    throw new ArgumentNullException(nameof(host));
+
+                if (!_isEmbedded)
+                {
+                    _legacyParent = _rect.parent;
+                    _legacyAnchorMin = _rect.anchorMin;
+                    _legacyAnchorMax = _rect.anchorMax;
+                    _legacyPivot = _rect.pivot;
+                    _legacyAnchoredPosition = _rect.anchoredPosition;
+                    _legacySizeDelta = _rect.sizeDelta;
+                    var capturedBackground =
+                        _rect.GetComponent<Image>();
+                    if (capturedBackground != null)
+                    {
+                        _legacyBackgroundColor =
+                            capturedBackground.color;
+                    }
+                }
+
+                _isEmbedded = true;
+                KillTransition();
+                _rect.SetParent(host, false);
+                StretchToHost(_rect);
+                var embeddedBackground = _rect.GetComponent<Image>();
+                if (embeddedBackground != null)
+                    embeddedBackground.color = Color.clear;
+                _shownPosition = Vector2.zero;
+                _isExpanded = true;
+                SetRollSourceInteraction(true);
+                Show(false);
+                return;
+            }
+
+            if (!_isEmbedded)
+                return;
+
+            KillTransition();
+            _isEmbedded = false;
+            _isExpanded = false;
+            SetRollSourceInteraction(false);
+            if (_legacyParent != null)
+                _rect.SetParent(_legacyParent, false);
+            _rect.anchorMin = _legacyAnchorMin;
+            _rect.anchorMax = _legacyAnchorMax;
+            _rect.pivot = _legacyPivot;
+            _rect.anchoredPosition = _legacyAnchoredPosition;
+            _rect.sizeDelta = _legacySizeDelta;
+            _shownPosition = _legacyAnchoredPosition;
+            var restoredBackground =
+                _rect.GetComponent<Image>();
+            if (restoredBackground != null)
+            {
+                restoredBackground.color =
+                    _legacyBackgroundColor;
+            }
+            Hide(false);
+        }
+
+        private void SetRollSourceInteraction(bool enabled)
+        {
+            for (var index = 0; index < _visuals.Count; index++)
+            {
+                var source = _visuals[index].RollSource;
+                if (source != null)
+                    source.SetInteractionEnabled(enabled);
+            }
         }
 
         public void ToggleExpanded()
@@ -250,6 +348,12 @@ namespace Trpg.Pawns
         {
             if (_rect == null)
                 return;
+
+            if (_isEmbedded)
+            {
+                StretchToHost(_rect);
+                return;
+            }
 
             _rect.sizeDelta = new Vector2(
                 Mathf.Clamp(width, 280f, PanelWidth),
@@ -354,9 +458,9 @@ namespace Trpg.Pawns
                 new Color(0.06f, 0.16f, 0.19f, 0.98f);
 
             CreateCellText("기술", rect, 0f, 0.43f);
-            CreateCellText("보통", rect, 0.43f, 0.60f);
-            CreateCellText("어려움", rect, 0.60f, 0.75f);
-            CreateCellText("극단", rect, 0.75f, 0.90f);
+            CreateCellText("보통", rect, 0.43f, 0.59f);
+            CreateCellText("어려움", rect, 0.59f, 0.74f);
+            CreateCellText("극단", rect, 0.74f, 0.90f);
             CreateCellText("삭제", rect, 0.90f, 1f);
         }
 
@@ -373,7 +477,7 @@ namespace Trpg.Pawns
             _viewport.anchorMin = Vector2.zero;
             _viewport.anchorMax = Vector2.one;
             _viewport.offsetMin = new Vector2(12f, 12f);
-            _viewport.offsetMax = new Vector2(-12f, -HeaderHeight);
+            _viewport.offsetMax = new Vector2(-30f, -HeaderHeight);
             viewportObject.GetComponent<Image>().color =
                 new Color(1f, 1f, 1f, 0.012f);
 
@@ -387,14 +491,15 @@ namespace Trpg.Pawns
             _content.pivot = new Vector2(0.5f, 1f);
             _content.anchoredPosition = Vector2.zero;
 
-            var scrollRect = gameObject.AddComponent<ScrollRect>();
-            scrollRect.viewport = _viewport;
-            scrollRect.content = _content;
-            scrollRect.horizontal = false;
-            scrollRect.vertical = true;
-            scrollRect.movementType =
+            _scrollRect = gameObject.AddComponent<ScrollRect>();
+            _scrollRect.viewport = _viewport;
+            _scrollRect.content = _content;
+            _scrollRect.horizontal = false;
+            _scrollRect.vertical = true;
+            _scrollRect.movementType =
                 ScrollRect.MovementType.Clamped;
-            scrollRect.scrollSensitivity = 24f;
+            _scrollRect.scrollSensitivity = 30f;
+            BuildVerticalScrollbar();
 
             _emptyText = CreateText(
                 "Empty",
@@ -408,6 +513,53 @@ namespace Trpg.Pawns
             _emptyText.rectTransform.anchorMax = Vector2.one;
             _emptyText.rectTransform.offsetMin = Vector2.zero;
             _emptyText.rectTransform.offsetMax = Vector2.zero;
+        }
+
+        private void BuildVerticalScrollbar()
+        {
+            var root = new GameObject(
+                "SkillVerticalScrollbar",
+                typeof(RectTransform),
+                typeof(CanvasRenderer),
+                typeof(Image),
+                typeof(Scrollbar));
+            var rect = root.GetComponent<RectTransform>();
+            rect.SetParent(_rect, false);
+            rect.anchorMin = new Vector2(1f, 0f);
+            rect.anchorMax = new Vector2(1f, 1f);
+            rect.pivot = new Vector2(1f, 0.5f);
+            rect.offsetMin = new Vector2(-18f, 12f);
+            rect.offsetMax = new Vector2(-6f, -HeaderHeight);
+
+            var background = root.GetComponent<Image>();
+            background.color =
+                new Color(0.015f, 0.04f, 0.05f, 0.90f);
+
+            var handleObject = new GameObject(
+                "Handle",
+                typeof(RectTransform),
+                typeof(CanvasRenderer),
+                typeof(Image));
+            var handleRect =
+                handleObject.GetComponent<RectTransform>();
+            handleRect.SetParent(rect, false);
+            handleRect.anchorMin = Vector2.zero;
+            handleRect.anchorMax = Vector2.one;
+            handleRect.offsetMin = new Vector2(2f, 2f);
+            handleRect.offsetMax = new Vector2(-2f, -2f);
+            var handleImage =
+                handleObject.GetComponent<Image>();
+            handleImage.color =
+                new Color(0.08f, 0.48f, 0.60f, 0.95f);
+
+            _verticalScrollbar = root.GetComponent<Scrollbar>();
+            _verticalScrollbar.direction =
+                Scrollbar.Direction.BottomToTop;
+            _verticalScrollbar.targetGraphic = handleImage;
+            _verticalScrollbar.handleRect = handleRect;
+            _scrollRect.verticalScrollbar = _verticalScrollbar;
+            _scrollRect.verticalScrollbarVisibility =
+                ScrollRect.ScrollbarVisibility.Permanent;
         }
 
         private void CreateCellText(
@@ -469,7 +621,7 @@ namespace Trpg.Pawns
             root.GetComponent<Image>().color =
                 new Color(0.055f, 0.14f, 0.17f, 0.98f);
 
-            return new SkillVisual
+            var visual = new SkillVisual
             {
                 Root = root,
                 NameInput = CreateInput(
@@ -483,21 +635,29 @@ namespace Trpg.Pawns
                     "Regular",
                     rect,
                     0.43f,
-                    0.60f,
+                    0.59f,
                     InputField.ContentType.IntegerNumber,
                     TextAnchor.MiddleCenter),
                 Hard = CreateValueText(
                     "Hard",
                     rect,
-                    0.60f,
-                    0.75f),
+                    0.59f,
+                    0.74f),
                 Extreme = CreateValueText(
                     "Extreme",
                     rect,
-                    0.75f,
+                    0.74f,
                     0.90f),
                 RemoveButton = CreateRemoveButton(rect)
             };
+            visual.RollSource = root.AddComponent<PawnRollSourceWidget>();
+            PawnRollSourceWidget.ForwardInputDragEvents(
+                visual.NameInput.gameObject,
+                visual.RollSource);
+            PawnRollSourceWidget.ForwardInputDragEvents(
+                visual.RegularInput.gameObject,
+                visual.RollSource);
+            return visual;
         }
 
         private Button CreateRemoveButton(RectTransform parent)
@@ -628,6 +788,26 @@ namespace Trpg.Pawns
             visual.RegularInput.interactable = _canEdit;
             visual.RemoveButton.interactable = _canEdit;
 
+            var sourceId = string.IsNullOrWhiteSpace(data.SkillId)
+                ? $"skill:{visual.BoundName}"
+                : data.SkillId;
+            var regular = Mathf.Clamp(data.Regular, 1, 100);
+            var hard = data.Hard >= 1
+                ? Mathf.Clamp(data.Hard, 1, 100)
+                : Mathf.Max(1, regular / 2);
+            var extreme = data.Extreme >= 1
+                ? Mathf.Clamp(data.Extreme, 1, 100)
+                : Mathf.Max(1, regular / 5);
+            var source = new PawnCheckSourceData(
+                sourceId,
+                visual.BoundName,
+                PawnRollSourceKind.Skill,
+                regular,
+                hard,
+                extreme);
+            visual.RollSource.Bind(source);
+            visual.RollSource.SetInteractionEnabled(_isEmbedded);
+
             var unavailable =
                 data.UsesBaseValue && data.RequiresTraining;
             var color = unavailable
@@ -654,6 +834,7 @@ namespace Trpg.Pawns
             visual.NameInput.onEndEdit.RemoveAllListeners();
             visual.RegularInput.onEndEdit.RemoveAllListeners();
             visual.RemoveButton.onClick.RemoveAllListeners();
+            visual.RollSource?.Unbind();
             visual.SkillId = string.Empty;
         }
 
@@ -848,6 +1029,16 @@ namespace Trpg.Pawns
                         gameObject.SetActive(false);
                 })
                 .SetUpdate(true);
+        }
+
+        private static void StretchToHost(RectTransform rect)
+        {
+            rect.anchorMin = Vector2.zero;
+            rect.anchorMax = Vector2.one;
+            rect.pivot = new Vector2(0.5f, 0.5f);
+            rect.offsetMin = Vector2.zero;
+            rect.offsetMax = Vector2.zero;
+            rect.localScale = Vector3.one;
         }
 
         private void KillTransition()

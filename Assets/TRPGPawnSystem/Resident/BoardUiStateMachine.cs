@@ -100,12 +100,16 @@ namespace Trpg.Pawns
             }
         }
 
-        public static bool operator ==(BoardUiState left, BoardUiState right)
+        public static bool operator ==(
+            BoardUiState left,
+            BoardUiState right)
         {
             return left.Equals(right);
         }
 
-        public static bool operator !=(BoardUiState left, BoardUiState right)
+        public static bool operator !=(
+            BoardUiState left,
+            BoardUiState right)
         {
             return !left.Equals(right);
         }
@@ -113,7 +117,7 @@ namespace Trpg.Pawns
 
     /// <summary>
     /// Unity API에 의존하지 않는 보드 UI 상태 머신입니다.
-    /// Popover와 Modal은 7개 코어 화면 상태와 직교합니다.
+    /// Popover와 Modal은 일곱 개 코어 상태와 직교합니다.
     /// </summary>
     public sealed class BoardUiStateMachine
     {
@@ -160,6 +164,18 @@ namespace Trpg.Pawns
                     SheetDetail.None,
                     _state.Popover,
                     _state.Modal));
+        }
+
+        public BoardUiState FocusSheet(
+            SheetTab tab,
+            SheetDetail detail = SheetDetail.None)
+        {
+            return Commit(new BoardUiState(
+                BoardMode.Sheet,
+                tab,
+                detail,
+                _state.Popover,
+                _state.Modal));
         }
 
         public BoardUiState ClickSkillList()
@@ -351,51 +367,6 @@ namespace Trpg.Pawns.Tests
                 command(machine);
                 yield return machine.State;
             }
-        }
-    }
-}
-#endif
-
-#if UNITY_EDITOR
-namespace Trpg.Pawns.Editor
-{
-    [UnityEditor.InitializeOnLoad]
-    internal static class BoardUiMovementSettingsMigration
-    {
-        private const string SettingsPath =
-            "Assets/TRPGPawnSystem/PawnSystemSettings.asset";
-        private const float CorrectMetersPerFoot = 0.3048f;
-
-        static BoardUiMovementSettingsMigration()
-        {
-            UnityEditor.EditorApplication.delayCall += Apply;
-        }
-
-        private static void Apply()
-        {
-            var asset = UnityEditor.AssetDatabase.LoadMainAssetAtPath(
-                SettingsPath);
-            if (asset == null)
-                return;
-
-            var serialized = new UnityEditor.SerializedObject(asset);
-            var property = serialized.FindProperty(
-                "_metersPerMovementPoint");
-            if (property == null ||
-                UnityEngine.Mathf.Approximately(
-                    property.floatValue,
-                    CorrectMetersPerFoot))
-            {
-                return;
-            }
-
-            property.floatValue = CorrectMetersPerFoot;
-            serialized.ApplyModifiedPropertiesWithoutUndo();
-            UnityEditor.EditorUtility.SetDirty(asset);
-            UnityEditor.AssetDatabase.SaveAssets();
-            UnityEngine.Debug.Log(
-                "[Board UI] 이동 환산값을 0.3048m/ft로 수정했습니다.",
-                asset);
         }
     }
 }

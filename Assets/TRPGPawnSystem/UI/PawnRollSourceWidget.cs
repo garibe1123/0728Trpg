@@ -9,15 +9,15 @@ using UnityEngine.UI;
 namespace Trpg.Pawns
 {
     /// <summary>
-    /// 기존 스탯/스킬 행에 붙어 클릭 선택과 드래그를 제공합니다.
+    /// 기존 스탯/스킬 행 전체를 판정 소스로 드래그할 수 있게 합니다.
     /// 기존 Button, InputField, 레이아웃 데이터는 변경하지 않습니다.
     /// </summary>
     [DisallowMultipleComponent]
     public sealed class PawnRollSourceWidget : MonoBehaviour,
+        IInitializePotentialDragHandler,
         IBeginDragHandler,
         IDragHandler,
-        IEndDragHandler,
-        IPointerClickHandler
+        IEndDragHandler
     {
         private PawnCheckSourceData _data;
         private bool _isBound;
@@ -26,8 +26,15 @@ namespace Trpg.Pawns
         private bool _previousBlocksRaycasts;
         private RectTransform _dragGhost;
         private RectTransform _rootCanvasRect;
+        private ScrollRect _parentScrollRect;
+        private bool _isDraggingSource;
+        private bool _isForwardingScroll;
 
+        // 기존 Manager API 호환용입니다. 판정 소스는 클릭으로 선택하지
+        // 않고 드래그 앤 드롭으로만 전달합니다.
         public static event Action<PawnCheckSourceData> SourceSelected;
+        public static event Action<PawnCheckSourceData> DragStarted;
+        public static event Action DragEnded;
 
         public bool IsBound => _isBound;
 
@@ -55,27 +62,80 @@ namespace Trpg.Pawns
 
         public void SetInteractionEnabled(bool value)
         {
+            if (!value && IsInsideEmbeddedPanel())
+                value = true;
+
             _interactionEnabled = value;
             enabled = _isBound && _interactionEnabled;
             if (!enabled)
                 EndDragVisual();
         }
 
-        public void OnPointerClick(PointerEventData eventData)
+        private bool IsInsideEmbeddedPanel()
         {
-            if (!CanUse(eventData) ||
-                eventData.button != PointerEventData.InputButton.Left)
-            {
-                return;
-            }
+            var skillPanel = GetComponentInParent<
+                PawnSkillPanelWidget>();
+            if (skillPanel != null && skillPanel.IsEmbedded)
+                return true;
 
-            SourceSelected?.Invoke(_data);
+            var statPanel = GetComponentInParent<
+                PawnStatPanelWidget>();
+            return statPanel != null && statPanel.IsEmbedded;
+        }
+
+        public static void ForwardInputDragEvents(
+            GameObject inputObject,
+            PawnRollSourceWidget owner)
+        {
+            if (inputObject == null || owner == null)
+                return;
+
+            var trigger = inputObject.GetComponent<EventTrigger>();
+            if (trigger == null)
+                trigger = inputObject.AddComponent<EventTrigger>();
+            if (trigger.triggers == null)
+                trigger.triggers = new List<EventTrigger.Entry>(4);
+
+            AddForwardedEvent(
+                trigger,
+                EventTriggerType.InitializePotentialDrag,
+                owner.OnInitializePotentialDrag);
+            AddForwardedEvent(
+                trigger,
+                EventTriggerType.BeginDrag,
+                owner.OnBeginDrag);
+            AddForwardedEvent(
+                trigger,
+                EventTriggerType.Drag,
+                owner.OnDrag);
+            AddForwardedEvent(
+                trigger,
+                EventTriggerType.EndDrag,
+                owner.OnEndDrag);
+        }
+
+        public void OnInitializePotentialDrag(
+            PointerEventData eventData)
+        {
+            if (eventData == null || !_isBound || !_interactionEnabled)
+                return;
+
+            eventData.useDragThreshold = true;
+            _parentScrollRect = GetComponentInParent<ScrollRect>();
+            _parentScrollRect?.OnInitializePotentialDrag(eventData);
         }
 
         public void OnBeginDrag(PointerEventData eventData)
         {
-            if (!CanUse(eventData))
+            if (!CanDrag(eventData))
                 return;
+
+            if (ShouldForwardToScroll(eventData))
+            {
+                _isForwardingScroll = true;
+                _parentScrollRect.OnBeginDrag(eventData);
+                return;
+            }
 
             var canvas = GetComponentInParent<Canvas>();
             var rootCanvas = canvas != null ? canvas.rootCanvas : null;
@@ -97,27 +157,45 @@ namespace Trpg.Pawns
             _sourceCanvasGroup.blocksRaycasts = false;
             _dragGhost = CreateGhost(_rootCanvasRect);
             PositionGhost(eventData);
+            _isDraggingSource = true;
+            DragStarted?.Invoke(_data);
         }
 
         public void OnDrag(PointerEventData eventData)
         {
-            if (_interactionEnabled)
+            if (_isForwardingScroll)
+            {
+                _parentScrollRect?.OnDrag(eventData);
+                return;
+            }
+
+            if (_isDraggingSource && _interactionEnabled)
                 PositionGhost(eventData);
         }
 
         public void OnEndDrag(PointerEventData eventData)
         {
+            if (_isForwardingScroll)
+            {
+                _parentScrollRect?.OnEndDrag(eventData);
+                _isForwardingScroll = false;
+                _parentScrollRect = null;
+                return;
+            }
+
+            if (_isDraggingSource)
+                DragEnded?.Invoke();
             EndDragVisual();
         }
 
-        private bool CanUse(PointerEventData eventData)
+        private bool CanDrag(PointerEventData eventData)
         {
             return _isBound &&
                    _interactionEnabled &&
-                   !IsInputFieldInteraction(eventData);
+                   !IsChildButtonInteraction(eventData);
         }
 
-        private static bool IsInputFieldInteraction(
+        private bool IsChildButtonInteraction(
             PointerEventData eventData)
         {
             if (eventData == null)
@@ -127,8 +205,33 @@ namespace Trpg.Pawns
             if (target == null)
                 target = eventData.pointerCurrentRaycast.gameObject;
 
-            return target != null &&
-                   target.GetComponentInParent<InputField>() != null;
+            var button = target != null
+                ? target.GetComponentInParent<Button>()
+                : null;
+            return button != null && button.gameObject != gameObject;
+        }
+
+        private bool ShouldForwardToScroll(PointerEventData eventData)
+        {
+            if (_parentScrollRect == null || eventData == null)
+                return false;
+
+            var delta = eventData.position - eventData.pressPosition;
+            return Mathf.Abs(delta.y) > Mathf.Abs(delta.x);
+        }
+
+        private static void AddForwardedEvent(
+            EventTrigger trigger,
+            EventTriggerType eventType,
+            Action<PointerEventData> callback)
+        {
+            var entry = new EventTrigger.Entry
+            {
+                eventID = eventType
+            };
+            entry.callback.AddListener(
+                data => callback(data as PointerEventData));
+            trigger.triggers.Add(entry);
         }
 
         private void PositionGhost(PointerEventData eventData)
@@ -230,6 +333,9 @@ namespace Trpg.Pawns
             _dragGhost = null;
             _rootCanvasRect = null;
             _sourceCanvasGroup = null;
+            _parentScrollRect = null;
+            _isDraggingSource = false;
+            _isForwardingScroll = false;
         }
 
         private void OnDisable()
@@ -247,7 +353,8 @@ namespace Trpg.Pawns
         private static readonly string[] IgnoredLabels =
         {
             "스탯", "스킬", "기술", "보통", "일반", "어려움",
-            "극단", "극단적", "추가", "+", "캐릭터 스탯"
+            "극단", "극단적", "추가", "+", "캐릭터 스탯",
+            "상세보기"
         };
 
         public static void BindExistingRows(
@@ -267,6 +374,24 @@ namespace Trpg.Pawns
             if (rootCanvas == null)
                 return;
 
+            var existingSources = rootCanvas.GetComponentsInChildren<
+                PawnRollSourceWidget>(true);
+            for (var index = 0;
+                 index < existingSources.Length;
+                 index++)
+            {
+                var existing = existingSources[index];
+                if (existing == null ||
+                    !existing.TryGetData(out var existingData) ||
+                    !existingData.IsValid)
+                {
+                    continue;
+                }
+
+                if (!destination.Contains(existing))
+                    destination.Add(existing);
+            }
+
             var panels = rootCanvas.GetComponentsInChildren<
                 PawnStatPanelWidget>(true);
             for (var panelIndex = 0;
@@ -275,6 +400,45 @@ namespace Trpg.Pawns
             {
                 ArrangeDerivedStatRows(panels[panelIndex]);
                 BindPanel(panels[panelIndex], destination);
+            }
+
+            var skillPanels = rootCanvas.GetComponentsInChildren<
+                PawnSkillPanelWidget>(true);
+            for (var panelIndex = 0;
+                 panelIndex < skillPanels.Length;
+                 panelIndex++)
+            {
+                BindSkillPanel(skillPanels[panelIndex], destination);
+            }
+        }
+
+        private static void BindSkillPanel(
+            PawnSkillPanelWidget panel,
+            ICollection<PawnRollSourceWidget> destination)
+        {
+            if (panel == null)
+                return;
+
+            var buttons = panel.GetComponentsInChildren<Button>(true);
+            for (var index = 0; index < buttons.Length; index++)
+            {
+                var button = buttons[index];
+                if (button == null ||
+                    !TryReadRow(button, out var source))
+                {
+                    continue;
+                }
+
+                var widget = button.GetComponent<PawnRollSourceWidget>();
+                if (widget == null)
+                {
+                    widget = button.gameObject.AddComponent<
+                        PawnRollSourceWidget>();
+                }
+
+                widget.Bind(source);
+                if (!destination.Contains(widget))
+                    destination.Add(widget);
             }
         }
 
@@ -294,20 +458,50 @@ namespace Trpg.Pawns
 
                 if (!TryReadRow(button, out var source))
                 {
-                    button.GetComponent<PawnRollSourceWidget>()?.Unbind();
+                    // StatEntry 내부의 명시적 판정 버튼은 부모 행에서
+                    // 판정 데이터를 받는다. 이 하위 Button 순회에서
+                    // 다시 Unbind하면 클릭/드래그가 즉시 끊어진다.
+                    if (!string.Equals(
+                            button.gameObject.name,
+                            "Roll",
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        button.GetComponent<
+                            PawnRollSourceWidget>()?.Unbind();
+                    }
                     continue;
                 }
 
-                var widget = button.GetComponent<PawnRollSourceWidget>();
-                if (widget == null)
+                var explicitRoll = button.transform.Find("Roll");
+                PawnRollSourceWidget widget;
+                if (explicitRoll != null)
                 {
-                    widget =
-                        button.gameObject.AddComponent<
+                    widget = explicitRoll.GetComponent<
+                        PawnRollSourceWidget>();
+                    if (widget == null)
+                    {
+                        widget = explicitRoll.gameObject.AddComponent<
                             PawnRollSourceWidget>();
+                    }
+
+                    var rowWidget = button.GetComponent<
+                        PawnRollSourceWidget>();
+                    if (rowWidget != null && rowWidget != widget)
+                        rowWidget.Unbind();
+                }
+                else
+                {
+                    widget = button.GetComponent<PawnRollSourceWidget>();
+                    if (widget == null)
+                    {
+                        widget = button.gameObject.AddComponent<
+                            PawnRollSourceWidget>();
+                    }
                 }
 
                 widget.Bind(source);
-                destination.Add(widget);
+                if (!destination.Contains(widget))
+                    destination.Add(widget);
             }
         }
 
@@ -477,11 +671,17 @@ namespace Trpg.Pawns
 
         private static void ConfigureCheckableRow(Button row)
         {
-            SetColumn(row.transform, "Name", 0f, 0.34f, true);
-            SetColumn(row.transform, "Regular", 0.34f, 0.56f, true);
-            SetColumn(row.transform, "Hard", 0.56f, 0.78f, true);
+            SetColumn(row.transform, "Name", 0f, 0.36f, true);
+            SetColumn(row.transform, "Regular", 0.36f, 0.57f, true);
+            SetColumn(row.transform, "Hard", 0.57f, 0.78f, true);
             SetColumn(row.transform, "Extreme", 0.78f, 1f, true);
-            SetColumn(row.transform, "RegularInput", 0.34f, 0.56f, true);
+            SetColumn(
+                row.transform,
+                "RegularInput",
+                0.36f,
+                0.57f,
+                true);
+            SetColumn(row.transform, "Roll", 0f, 0f, false);
             SetRowLayoutWidth(row, 1f);
         }
 
@@ -492,6 +692,7 @@ namespace Trpg.Pawns
             SetColumn(row.transform, "Hard", 0f, 0f, false);
             SetColumn(row.transform, "Extreme", 0f, 0f, false);
             SetColumn(row.transform, "RegularInput", 0.64f, 1f, true);
+            SetColumn(row.transform, "Roll", 0f, 0f, false);
             SetRowLayoutWidth(row, 1f);
 
             var image = row.targetGraphic as Image;
@@ -512,7 +713,7 @@ namespace Trpg.Pawns
                 element = row.gameObject.AddComponent<LayoutElement>();
             element.minWidth = 0f;
             element.flexibleWidth = flexible;
-            element.preferredHeight = 40f;
+            element.preferredHeight = 44f;
         }
 
         private static void SetColumn(

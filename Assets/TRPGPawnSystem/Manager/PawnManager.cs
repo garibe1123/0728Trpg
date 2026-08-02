@@ -103,9 +103,14 @@ namespace Trpg.Pawns
         private Vector2 _turnButtonOffset =
             new Vector2(24f, -24f);
 
-        [SerializeField, Tooltip("자동 생성 턴 버튼의 크기")]
-        private Vector2 _turnButtonSize =
+        [FormerlySerializedAs("_turnButtonSize")]
+        [SerializeField, HideInInspector]
+        private Vector2 _legacyTurnButtonSize =
             new Vector2(180f, 64f);
+
+        [SerializeField, Min(72f), Tooltip(
+            "좌측 상단 턴 넘기기 버튼의 정사각형 한 변 길이")]
+        private float _turnButtonDiameter = 112f;
 
         [SerializeField, Tooltip("자동 생성 턴 버튼의 기본 색")]
         private Color _turnButtonColor =
@@ -129,6 +134,8 @@ namespace Trpg.Pawns
         private GameObject _ownedTurnCanvas;
         private Image _nextTurnButtonImage;
         private Text _nextTurnButtonLabel;
+        private Sprite _ownedTurnButtonSprite;
+        private Texture2D _ownedTurnButtonTexture;
         private TurnGroup _currentTurnGroup;
         private bool _hasCurrentTurnGroup;
         private bool _isMovementModeActive;
@@ -414,6 +421,18 @@ namespace Trpg.Pawns
             {
                 Destroy(_ownedTurnCanvas);
                 _ownedTurnCanvas = null;
+            }
+
+            if (_ownedTurnButtonSprite != null)
+            {
+                Destroy(_ownedTurnButtonSprite);
+                _ownedTurnButtonSprite = null;
+            }
+
+            if (_ownedTurnButtonTexture != null)
+            {
+                Destroy(_ownedTurnButtonTexture);
+                _ownedTurnButtonTexture = null;
             }
 
             InteractiveSelectionChanged = null;
@@ -1072,6 +1091,7 @@ namespace Trpg.Pawns
             {
                 EnsureEventSystem();
                 CacheTurnButtonParts();
+                ApplyTurnButtonLayout();
                 return;
             }
 
@@ -1115,10 +1135,14 @@ namespace Trpg.Pawns
             buttonRect.anchorMax = new Vector2(0f, 1f);
             buttonRect.pivot = new Vector2(0f, 1f);
             buttonRect.anchoredPosition = _turnButtonOffset;
-            buttonRect.sizeDelta = _turnButtonSize;
+            buttonRect.sizeDelta =
+                Vector2.one * ResolveTurnButtonDiameter();
 
             _nextTurnButtonImage = buttonObject.GetComponent<Image>();
             _nextTurnButtonImage.color = _turnButtonColor;
+            _nextTurnButtonImage.sprite = GetTurnButtonSprite();
+            _nextTurnButtonImage.type = Image.Type.Simple;
+            _nextTurnButtonImage.preserveAspect = true;
 
             _nextTurnButton = buttonObject.GetComponent<Button>();
             _nextTurnButton.targetGraphic = _nextTurnButtonImage;
@@ -1139,11 +1163,11 @@ namespace Trpg.Pawns
 
             _nextTurnButtonLabel = labelObject.GetComponent<Text>();
             _nextTurnButtonLabel.font = GetRuntimeFont();
-            _nextTurnButtonLabel.text = "턴 넘기기";
-            _nextTurnButtonLabel.fontSize = 24;
+            _nextTurnButtonLabel.text = "턴\n넘기기";
+            _nextTurnButtonLabel.fontSize = 23;
             _nextTurnButtonLabel.resizeTextForBestFit = true;
-            _nextTurnButtonLabel.resizeTextMinSize = 14;
-            _nextTurnButtonLabel.resizeTextMaxSize = 28;
+            _nextTurnButtonLabel.resizeTextMinSize = 13;
+            _nextTurnButtonLabel.resizeTextMaxSize = 25;
             _nextTurnButtonLabel.alignment =
                 TextAnchor.MiddleCenter;
             _nextTurnButtonLabel.color = Color.white;
@@ -1164,8 +1188,130 @@ namespace Trpg.Pawns
 
             if (_nextTurnButtonLabel != null)
             {
-                _nextTurnButtonLabel.text = "턴 넘기기";
+                _nextTurnButtonLabel.text = "턴\n넘기기";
+                _nextTurnButtonLabel.alignment =
+                    TextAnchor.MiddleCenter;
+                _nextTurnButtonLabel.resizeTextForBestFit = true;
+                _nextTurnButtonLabel.resizeTextMinSize = 13;
+                _nextTurnButtonLabel.resizeTextMaxSize = 25;
             }
+
+            ApplyTurnButtonLayout();
+        }
+
+        private void ApplyTurnButtonLayout()
+        {
+            if (_nextTurnButton == null)
+            {
+                return;
+            }
+
+            var canvas =
+                _nextTurnButton.GetComponentInParent<Canvas>();
+            if (canvas != null &&
+                _nextTurnButton.transform.parent != canvas.transform)
+            {
+                _nextTurnButton.transform.SetParent(
+                    canvas.transform,
+                    false);
+            }
+
+            var buttonRect =
+                _nextTurnButton.transform as RectTransform;
+            if (buttonRect != null)
+            {
+                buttonRect.anchorMin = new Vector2(0f, 1f);
+                buttonRect.anchorMax = new Vector2(0f, 1f);
+                buttonRect.pivot = new Vector2(0f, 1f);
+                buttonRect.anchoredPosition = _turnButtonOffset;
+                buttonRect.sizeDelta =
+                    Vector2.one * ResolveTurnButtonDiameter();
+            }
+
+            if (_nextTurnButtonImage == null)
+            {
+                _nextTurnButtonImage =
+                    _nextTurnButton.targetGraphic as Image;
+                if (_nextTurnButtonImage == null)
+                {
+                    _nextTurnButtonImage =
+                        _nextTurnButton.GetComponent<Image>();
+                }
+            }
+
+            if (_nextTurnButtonImage != null)
+            {
+                _nextTurnButtonImage.sprite = GetTurnButtonSprite();
+                _nextTurnButtonImage.type = Image.Type.Simple;
+                _nextTurnButtonImage.preserveAspect = true;
+                _nextTurnButton.targetGraphic =
+                    _nextTurnButtonImage;
+            }
+        }
+
+        private float ResolveTurnButtonDiameter()
+        {
+            if (_turnButtonDiameter >= 72f)
+            {
+                return _turnButtonDiameter;
+            }
+
+            return Mathf.Max(
+                72f,
+                Mathf.Max(
+                    _legacyTurnButtonSize.x,
+                    _legacyTurnButtonSize.y));
+        }
+
+        private Sprite GetTurnButtonSprite()
+        {
+            if (_ownedTurnButtonSprite != null)
+            {
+                return _ownedTurnButtonSprite;
+            }
+
+            const int textureSize = 128;
+            var pixels = new Color32[textureSize * textureSize];
+            var center = (textureSize - 1) * 0.5f;
+            var radius = center - 1f;
+            var radiusSquared = radius * radius;
+
+            for (var y = 0; y < textureSize; y++)
+            {
+                for (var x = 0; x < textureSize; x++)
+                {
+                    var offsetX = x - center;
+                    var offsetY = y - center;
+                    var index = y * textureSize + x;
+                    pixels[index] =
+                        offsetX * offsetX + offsetY * offsetY <=
+                        radiusSquared
+                            ? new Color32(255, 255, 255, 255)
+                            : new Color32(255, 255, 255, 0);
+                }
+            }
+
+            _ownedTurnButtonTexture = new Texture2D(
+                textureSize,
+                textureSize,
+                TextureFormat.RGBA32,
+                false)
+            {
+                name = "PawnTurnButtonCircleTexture",
+                filterMode = FilterMode.Bilinear,
+                wrapMode = TextureWrapMode.Clamp
+            };
+            _ownedTurnButtonTexture.SetPixels32(pixels);
+            _ownedTurnButtonTexture.Apply(false, true);
+
+            _ownedTurnButtonSprite = Sprite.Create(
+                _ownedTurnButtonTexture,
+                new Rect(0f, 0f, textureSize, textureSize),
+                new Vector2(0.5f, 0.5f),
+                100f);
+            _ownedTurnButtonSprite.name =
+                "PawnTurnButtonCircleSprite";
+            return _ownedTurnButtonSprite;
         }
 
         private void BindTurnButton()
@@ -1176,8 +1322,8 @@ namespace Trpg.Pawns
                 return;
             }
 
-            _nextTurnButton.onClick.RemoveListener(
-                HandleNextTurnClicked);
+            _nextTurnButton.onClick =
+                new Button.ButtonClickedEvent();
             _nextTurnButton.onClick.AddListener(
                 HandleNextTurnClicked);
         }
@@ -1213,7 +1359,7 @@ namespace Trpg.Pawns
 
             if (_nextTurnButtonLabel != null)
             {
-                _nextTurnButtonLabel.text = "턴 넘기기";
+                _nextTurnButtonLabel.text = "턴\n넘기기";
             }
         }
 

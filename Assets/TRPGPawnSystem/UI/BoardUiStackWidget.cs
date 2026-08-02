@@ -1,5 +1,4 @@
 using System;
-using DG.Tweening;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
@@ -53,9 +52,9 @@ namespace Trpg.Pawns
     {
         public const float ReferenceHeight = 1080f;
         public const float HorizontalMargin = 24f;
-        public const float SheetHeight = 420f;
-        public const float BottomOffset = 147f;
         public const float TopMargin = 24f;
+        public const float DefaultBottomOffset = 147f;
+        public const float MinimumPanelHeight = 420f;
 
         public static BoardUiLayout Calculate(
             int actualWidth,
@@ -74,43 +73,39 @@ namespace Trpg.Pawns
                 1f,
                 effective - HorizontalMargin * 2f);
 
-            float left;
-            float right;
+            float desiredSide;
             float minimumCenter;
             switch (band)
             {
                 case BoardUiWidthBand.Base:
-                    left = 440f;
-                    right = 620f;
-                    minimumCenter = 640f;
+                    desiredSide = 420f;
+                    minimumCenter = 650f;
                     break;
                 case BoardUiWidthBand.Compact:
-                    left = 380f;
-                    right = 560f;
+                    desiredSide = 370f;
                     minimumCenter = 380f;
                     break;
                 default:
-                    left = Mathf.Clamp(usable * 0.29f, 280f, 340f);
-                    right = Mathf.Clamp(usable * 0.43f, 390f, 500f);
+                    desiredSide = Mathf.Clamp(
+                        usable * 0.28f,
+                        278f,
+                        330f);
                     minimumCenter = 220f;
                     break;
             }
 
-            var total = left + right + minimumCenter;
-            if (total > usable)
-            {
-                var overflow = total - usable;
-                var rightReduce = Mathf.Min(
-                    overflow * 0.62f,
-                    Mathf.Max(0f, right - 350f));
-                right -= rightReduce;
-                overflow -= rightReduce;
-                left -= Mathf.Min(
-                    overflow,
-                    Mathf.Max(0f, left - 250f));
-            }
+            // 좌우 패널은 항상 같은 너비를 사용한다. 중앙 여유 공간이
+            // 부족할 때도 한쪽만 줄이지 않고 동일한 폭으로 축소한다.
+            var maximumEqualSide = Mathf.Max(
+                220f,
+                (usable - minimumCenter) * 0.5f);
+            var side = Mathf.Min(desiredSide, maximumEqualSide);
+            if (side * 2f > usable)
+                side = usable * 0.5f;
 
-            var center = Mathf.Max(0f, usable - left - right);
+            var left = side;
+            var right = side;
+            var center = Mathf.Max(0f, usable - side * 2f);
             return new BoardUiLayout(
                 band,
                 effective,
@@ -121,43 +116,48 @@ namespace Trpg.Pawns
     }
 
     /// <summary>
-    /// 좌측은 인물/가방/캐릭터 정보, 우측은 능력치/기술을
-    /// 각각 같은 자리에서 교체해 보여 줍니다. 중앙은 평소 비워 두고,
-    /// 판정 원본 드래그 중에만 드롭 타깃과 판정 패널을 표시합니다.
+    /// 하단 정보 바는 그대로 두고 화면 좌우에 부착되는 캐릭터 대시보드입니다.
+    /// 좌측은 인물/가방/캐릭터 정보, 우측은 능력치/기술을 같은 자리에서
+    /// 전환하며 중앙은 판정 소스를 드래그할 때만 사용합니다.
     /// </summary>
     public sealed class BoardUiStackWidget : MonoBehaviour
     {
         private static readonly Color Surface =
-            new Color(0.035f, 0.055f, 0.065f, 0.985f);
+            new Color(0.028f, 0.047f, 0.056f, 0.985f);
         private static readonly Color SurfaceElement =
-            new Color(0.055f, 0.095f, 0.11f, 0.985f);
+            new Color(0.050f, 0.086f, 0.101f, 0.985f);
         private static readonly Color Border =
-            new Color(0.23f, 0.38f, 0.42f, 0.42f);
+            new Color(0.20f, 0.42f, 0.48f, 0.48f);
         private static readonly Color Accent =
             new Color(0.08f, 0.48f, 0.60f, 1f);
         private static readonly Color TextMain =
-            new Color(0.91f, 0.95f, 0.97f, 1f);
+            new Color(0.92f, 0.96f, 0.98f, 1f);
         private static readonly Color TextMuted =
             new Color(0.58f, 0.70f, 0.74f, 1f);
 
-        private const float TabBarHeight = 42f;
+        private const float TabBarHeight = 56f;
+        private const float ActionBarHeight = 48f;
+        private const float IdentityHeaderHeight = 188f;
         private const float InnerPadding = 12f;
         private const float RollWidth = 470f;
-        private const float RollHeight = 350f;
+        private const float RollHeight = 380f;
 
         private Font _font;
         private Image _portraitImage;
         private Text _nameText;
         private Text _jobText;
         private Text _movementText;
+        private Text _identityDetailText;
         private Button _identityTab;
         private Button _inventoryTab;
         private Button _profileTab;
         private Button _statsTab;
         private Button _skillsTab;
+        private Button _checkRollButton;
+        private Button _effectRollButton;
         private RectTransform _leftTabs;
         private RectTransform _rightTabs;
-        private Text _identityDetailText;
+        private RectTransform _rightActionBar;
         private Text _dragSourceText;
         private Text _sourceText;
         private Text _targetText;
@@ -168,6 +168,11 @@ namespace Trpg.Pawns
         private Button _rollButton;
         private Button _pushButton;
         private Button _luckButton;
+        private RectTransform _effectRollHost;
+        private InputField _effectDiceCountInput;
+        private InputField _effectDiceSidesInput;
+        private InputField _effectModifierInput;
+        private Text _effectValidationText;
         private PawnCheckSourceData _selectedSource;
         private PawnCheckDifficulty _selectedDifficulty;
         private int _bonusPenalty;
@@ -193,9 +198,13 @@ namespace Trpg.Pawns
         public RectTransform DropPromptHost { get; private set; }
         public RectTransform RollHost { get; private set; }
         public BoardUiLayout Layout { get; private set; }
-        public float PanelHeight { get; private set; } = 900f;
+        public float LeftPanelHeight { get; private set; } =
+            BoardUiLayoutCalculator.MinimumPanelHeight;
+        public float RightPanelHeight { get; private set; } =
+            BoardUiLayoutCalculator.MinimumPanelHeight;
+        public float PanelHeight => LeftPanelHeight;
         public float PanelBottomOffset { get; private set; } =
-            BoardUiLayoutCalculator.BottomOffset;
+            BoardUiLayoutCalculator.DefaultBottomOffset;
         public BoardLeftPane LeftPane => _leftPane;
         public BoardRightPane RightPane => _rightPane;
         public PawnCheckSourceData SelectedSource => _selectedSource;
@@ -204,6 +213,10 @@ namespace Trpg.Pawns
 
         public event Action<BoardLeftPane> LeftPaneRequested;
         public event Action<BoardRightPane> RightPaneRequested;
+        public event Action CheckRollRequested;
+        public event Action EffectRollRequested;
+        public event Action<PawnEffectRollRequest> EffectRollConfirmed;
+        public event Action RollOverlayCloseRequested;
         public event Action<PawnCheckSourceData> SourceDropped;
         public event Action<PawnCheckDifficulty> DifficultyRequested;
         public event Action RollRequested;
@@ -229,29 +242,20 @@ namespace Trpg.Pawns
             return widget;
         }
 
-        public void ApplyLayout(BoardUiLayout layout)
-        {
-            var rootHeight = RootRect != null
-                ? Mathf.Max(1f, RootRect.rect.height)
-                : 1080f;
-            var panelHeight = Mathf.Max(420f,
-                rootHeight -
-                BoardUiLayoutCalculator.BottomOffset -
-                BoardUiLayoutCalculator.TopMargin);
-            ApplyLayout(
-                layout,
-                BoardUiLayoutCalculator.BottomOffset,
-                panelHeight);
-        }
-
         public void ApplyLayout(
             BoardUiLayout layout,
             float bottomOffset,
-            float panelHeight)
+            float leftPanelHeight,
+            float rightPanelHeight)
         {
             Layout = layout;
             PanelBottomOffset = Mathf.Max(0f, bottomOffset);
-            PanelHeight = Mathf.Max(420f, panelHeight);
+            LeftPanelHeight = Mathf.Max(
+                BoardUiLayoutCalculator.MinimumPanelHeight,
+                leftPanelHeight);
+            RightPanelHeight = Mathf.Max(
+                320f,
+                rightPanelHeight);
 
             var leftOpen = LeftMask.sizeDelta.y > 0.5f;
             var rightOpen = RightMask.sizeDelta.y > 0.5f;
@@ -261,30 +265,31 @@ namespace Trpg.Pawns
                 BoardUiLayoutCalculator.HorizontalMargin,
                 PanelBottomOffset,
                 layout.LeftWidth,
-                leftOpen ? PanelHeight : 0f);
+                leftOpen ? LeftPanelHeight : 0f);
             LeftContent.sizeDelta = new Vector2(
                 layout.LeftWidth,
-                PanelHeight);
+                LeftPanelHeight);
 
             SetBottomRight(
                 RightMask,
                 BoardUiLayoutCalculator.HorizontalMargin,
                 PanelBottomOffset,
                 layout.RightWidth,
-                rightOpen ? PanelHeight : 0f);
+                rightOpen ? RightPanelHeight : 0f);
             RightContent.sizeDelta = new Vector2(
                 layout.RightWidth,
-                PanelHeight);
+                RightPanelHeight);
 
             var rollWidth = Mathf.Min(
                 RollWidth,
-                Mathf.Max(360f, layout.CenterWidth - 24f));
+                Mathf.Max(340f, layout.CenterWidth - 24f));
             RollOverlayContent.sizeDelta = new Vector2(
                 rollWidth,
                 RollHeight);
             RollOverlayMask.sizeDelta = new Vector2(
                 rollWidth,
                 RollOverlayMask.sizeDelta.y);
+
             ApplyBand(layout.Band);
             BringTabsToFront();
         }
@@ -299,11 +304,7 @@ namespace Trpg.Pawns
             _jobText.text = string.IsNullOrWhiteSpace(data.Description)
                 ? "직업 정보 없음"
                 : data.Description;
-            if (_identityDetailText != null)
-            {
-                _identityDetailText.text =
-                    $"{_nameText.text}\n\n{_jobText.text}";
-            }
+            RefreshIdentitySummary();
         }
 
         public void ClearInfo()
@@ -313,8 +314,7 @@ namespace Trpg.Pawns
             _nameText.text = string.Empty;
             _jobText.text = string.Empty;
             _movementText.text = string.Empty;
-            if (_identityDetailText != null)
-                _identityDetailText.text = string.Empty;
+            _identityDetailText.text = string.Empty;
             ClearSource();
         }
 
@@ -323,6 +323,7 @@ namespace Trpg.Pawns
             _movementText.text = maximum > 0.0001f
                 ? $"이동 {remaining:0.0}m 남음"
                 : "이동 정보 없음";
+            RefreshIdentitySummary();
         }
 
         public void SetLeftPane(BoardLeftPane pane)
@@ -349,38 +350,45 @@ namespace Trpg.Pawns
 
         public void SetPanelsImmediate(bool visible)
         {
-            var height = visible
-                ? PanelHeight
-                : 0f;
+            var leftHeight = visible ? LeftPanelHeight : 0f;
+            var rightHeight = visible ? RightPanelHeight : 0f;
+            LeftMask.gameObject.SetActive(visible);
+            RightMask.gameObject.SetActive(visible);
             LeftMask.sizeDelta = new Vector2(
                 Layout.LeftWidth,
-                height);
+                leftHeight);
             RightMask.sizeDelta = new Vector2(
                 Layout.RightWidth,
-                height);
+                rightHeight);
             LeftContentGroup.alpha = visible ? 1f : 0f;
             RightContentGroup.alpha = visible ? 1f : 0f;
-            LeftContentGroup.interactable = visible;
-            LeftContentGroup.blocksRaycasts = visible;
-            RightContentGroup.interactable = visible;
-            RightContentGroup.blocksRaycasts = visible;
+            SetPanelInput(visible);
+        }
+
+        public void SetPanelInput(bool enabled)
+        {
+            LeftContentGroup.interactable = enabled;
+            LeftContentGroup.blocksRaycasts = enabled;
+            RightContentGroup.interactable = enabled;
+            RightContentGroup.blocksRaycasts = enabled;
         }
 
         public void ShowDragTarget(PawnCheckSourceData source)
         {
             _dragSourceText.text = source.IsValid
                 ? $"{source.DisplayName}\n여기에 드롭해 판정 준비"
-                : "스탯 또는 기술을 여기에 드롭";
+                : "능력치 또는 기술 블록을 여기에 드롭";
             DropPromptHost.gameObject.SetActive(true);
             RollHost.gameObject.SetActive(false);
+            _effectRollHost.gameObject.SetActive(false);
             RollOverlayMask.gameObject.SetActive(true);
             RollOverlayGroup.alpha = 1f;
             RollOverlayGroup.interactable = true;
             RollOverlayGroup.blocksRaycasts = true;
-            RollOverlayMask.DOKill(true);
             RollOverlayMask.sizeDelta = new Vector2(
                 RollOverlayContent.sizeDelta.x,
-                Mathf.Max(190f, RollOverlayMask.sizeDelta.y));
+                210f);
+            RollOverlayMask.SetAsLastSibling();
         }
 
         public void HideDragTarget()
@@ -394,20 +402,53 @@ namespace Trpg.Pawns
         {
             DropPromptHost.gameObject.SetActive(false);
             RollHost.gameObject.SetActive(true);
+            _effectRollHost.gameObject.SetActive(false);
             RollOverlayMask.gameObject.SetActive(true);
+            RollOverlayGroup.alpha = 1f;
             RollOverlayGroup.interactable = true;
             RollOverlayGroup.blocksRaycasts = true;
             SelectSource(source);
+            RollOverlayMask.SetAsLastSibling();
         }
 
         public void ShowEmptyRollPanel()
         {
             DropPromptHost.gameObject.SetActive(false);
             RollHost.gameObject.SetActive(true);
+            _effectRollHost.gameObject.SetActive(false);
             RollOverlayMask.gameObject.SetActive(true);
+            RollOverlayGroup.alpha = 1f;
             RollOverlayGroup.interactable = true;
             RollOverlayGroup.blocksRaycasts = true;
             ClearSource();
+            RollOverlayMask.SetAsLastSibling();
+        }
+
+        public void ShowEffectRollPanel(
+            int defaultDiceCount,
+            int defaultDiceSides,
+            int modifier)
+        {
+            DropPromptHost.gameObject.SetActive(false);
+            RollHost.gameObject.SetActive(false);
+            _effectRollHost.gameObject.SetActive(true);
+            RollOverlayMask.gameObject.SetActive(true);
+            RollOverlayGroup.alpha = 1f;
+            RollOverlayGroup.interactable = true;
+            RollOverlayGroup.blocksRaycasts = true;
+            _effectDiceCountInput.SetTextWithoutNotify(
+                Mathf.Clamp(
+                    defaultDiceCount,
+                    1,
+                    PawnRollService.MaximumDiceCount).ToString());
+            _effectDiceSidesInput.SetTextWithoutNotify(
+                Mathf.Clamp(
+                    defaultDiceSides,
+                    2,
+                    PawnRollService.MaximumDiceSides).ToString());
+            _effectModifierInput.SetTextWithoutNotify(modifier.ToString());
+            _effectValidationText.text = string.Empty;
+            RollOverlayMask.SetAsLastSibling();
         }
 
         public void HideRollOverlayImmediate()
@@ -421,6 +462,7 @@ namespace Trpg.Pawns
             RollOverlayMask.gameObject.SetActive(false);
             DropPromptHost.gameObject.SetActive(false);
             RollHost.gameObject.SetActive(false);
+            _effectRollHost.gameObject.SetActive(false);
         }
 
         public void SelectSource(PawnCheckSourceData source)
@@ -440,12 +482,27 @@ namespace Trpg.Pawns
         public void ClearSource()
         {
             _selectedSource = default;
-            _sourceText.text = "스탯 또는 기술을 드롭";
+            _sourceText.text = "능력치 또는 기술 블록을 드롭";
             _targetText.text = "목표 —";
             _rollButton.interactable = false;
             SetSelected(_regularButton, false);
             SetSelected(_hardButton, false);
             SetSelected(_extremeButton, false);
+        }
+
+        public void BringTabsToFront()
+        {
+            if (_leftTabs != null)
+                _leftTabs.SetAsLastSibling();
+            if (_rightTabs != null)
+                _rightTabs.SetAsLastSibling();
+            if (_rightActionBar != null)
+                _rightActionBar.SetAsLastSibling();
+            if (RollOverlayMask != null &&
+                RollOverlayMask.gameObject.activeSelf)
+            {
+                RollOverlayMask.SetAsLastSibling();
+            }
         }
 
         private void Build(RectTransform root, Font font)
@@ -465,39 +522,35 @@ namespace Trpg.Pawns
             LeftMask.anchorMin = Vector2.zero;
             LeftMask.anchorMax = Vector2.zero;
             LeftMask.pivot = Vector2.zero;
-            LeftMask.sizeDelta = new Vector2(440f, 0f);
+            LeftMask.sizeDelta = new Vector2(420f, 0f);
+            LeftMask.gameObject.SetActive(false);
 
             LeftContent = CreateSurface("LeftContent", LeftMask, Surface);
             LeftContent.anchorMin = Vector2.zero;
             LeftContent.anchorMax = Vector2.zero;
             LeftContent.pivot = Vector2.zero;
-            LeftContent.sizeDelta = new Vector2(
-                440f,
-                900f);
+            LeftContent.sizeDelta = new Vector2(420f, 800f);
             LeftContentGroup =
                 LeftContent.gameObject.AddComponent<CanvasGroup>();
-            LeftContentGroup.alpha = 0f;
+            BuildLeftPanel();
 
             RightMask = CreateSurface("RightMask", RootRect, Surface);
             RightMask.gameObject.AddComponent<RectMask2D>();
             RightMask.anchorMin = Vector2.zero;
             RightMask.anchorMax = Vector2.zero;
             RightMask.pivot = Vector2.zero;
-            RightMask.sizeDelta = new Vector2(620f, 0f);
+            RightMask.sizeDelta = new Vector2(420f, 0f);
+            RightMask.gameObject.SetActive(false);
 
             RightContent = CreateSurface("RightContent", RightMask, Surface);
             RightContent.anchorMin = Vector2.zero;
             RightContent.anchorMax = Vector2.zero;
             RightContent.pivot = Vector2.zero;
-            RightContent.sizeDelta = new Vector2(
-                620f,
-                900f);
+            RightContent.sizeDelta = new Vector2(420f, 800f);
             RightContentGroup =
                 RightContent.gameObject.AddComponent<CanvasGroup>();
-            RightContentGroup.alpha = 0f;
-
-            BuildLeftPanel();
             BuildRightPanel();
+
             BuildCenterRollOverlay();
             SetLeftPane(BoardLeftPane.Identity);
             SetRightPane(BoardRightPane.Stats);
@@ -507,6 +560,7 @@ namespace Trpg.Pawns
         private void BuildLeftPanel()
         {
             AddBorder(LeftContent);
+
             _leftTabs = CreateSurface(
                 "LeftTabs",
                 LeftContent,
@@ -538,15 +592,17 @@ namespace Trpg.Pawns
             _profileTab.onClick.AddListener(
                 () => LeftPaneRequested?.Invoke(BoardLeftPane.Profile));
 
-            var portraitHost = CreateRect(
+            var portraitHost = CreateSurface(
                 "PersistentPortraitHost",
-                LeftContent);
+                LeftContent,
+                Surface);
             portraitHost.anchorMin = new Vector2(0f, 1f);
             portraitHost.anchorMax = new Vector2(1f, 1f);
             portraitHost.pivot = new Vector2(0.5f, 1f);
             portraitHost.anchoredPosition =
-                new Vector2(0f, -(TabBarHeight + 8f));
-            portraitHost.sizeDelta = new Vector2(0f, 206f);
+                new Vector2(0f, -TabBarHeight);
+            portraitHost.sizeDelta =
+                new Vector2(0f, IdentityHeaderHeight);
             BuildPersistentPortrait(portraitHost);
 
             var body = CreateRect("LeftBody", LeftContent);
@@ -555,7 +611,7 @@ namespace Trpg.Pawns
             body.offsetMin = new Vector2(InnerPadding, InnerPadding);
             body.offsetMax = new Vector2(
                 -InnerPadding,
-                -(TabBarHeight + 222f));
+                -(TabBarHeight + IdentityHeaderHeight + InnerPadding));
             body.gameObject.AddComponent<RectMask2D>();
 
             IdentityHost = CreateRect("IdentityHost", body);
@@ -577,28 +633,28 @@ namespace Trpg.Pawns
             portraitFrame.anchorMin = new Vector2(0f, 0.5f);
             portraitFrame.anchorMax = new Vector2(0f, 0.5f);
             portraitFrame.pivot = new Vector2(0f, 0.5f);
-            portraitFrame.anchoredPosition = new Vector2(14f, 0f);
-            portraitFrame.sizeDelta = new Vector2(176f, 176f);
+            portraitFrame.anchoredPosition = new Vector2(12f, 0f);
+            portraitFrame.sizeDelta = new Vector2(160f, 160f);
             AddBorder(portraitFrame);
 
             _portraitImage = CreateImage(
                 "Portrait",
                 portraitFrame,
                 Color.white);
-            Stretch(_portraitImage.rectTransform, 8f);
+            Stretch(_portraitImage.rectTransform, 6f);
             _portraitImage.preserveAspect = true;
             _portraitImage.raycastTarget = false;
 
             _nameText = CreateText(
                 "Name",
                 host,
-                23,
+                24,
                 FontStyle.Bold,
                 TextAnchor.UpperLeft,
                 TextMain);
-            _nameText.rectTransform.anchorMin = new Vector2(0f, 0f);
-            _nameText.rectTransform.anchorMax = new Vector2(1f, 1f);
-            _nameText.rectTransform.offsetMin = new Vector2(206f, 96f);
+            _nameText.rectTransform.anchorMin = Vector2.zero;
+            _nameText.rectTransform.anchorMax = Vector2.one;
+            _nameText.rectTransform.offsetMin = new Vector2(188f, 112f);
             _nameText.rectTransform.offsetMax = new Vector2(-14f, -18f);
 
             _jobText = CreateText(
@@ -608,10 +664,10 @@ namespace Trpg.Pawns
                 FontStyle.Normal,
                 TextAnchor.UpperLeft,
                 TextMuted);
-            _jobText.rectTransform.anchorMin = new Vector2(0f, 0f);
-            _jobText.rectTransform.anchorMax = new Vector2(1f, 1f);
-            _jobText.rectTransform.offsetMin = new Vector2(206f, 48f);
-            _jobText.rectTransform.offsetMax = new Vector2(-14f, -58f);
+            _jobText.rectTransform.anchorMin = Vector2.zero;
+            _jobText.rectTransform.anchorMax = Vector2.one;
+            _jobText.rectTransform.offsetMin = new Vector2(188f, 64f);
+            _jobText.rectTransform.offsetMax = new Vector2(-14f, -56f);
 
             _movementText = CreateText(
                 "Movement",
@@ -620,9 +676,9 @@ namespace Trpg.Pawns
                 FontStyle.Bold,
                 TextAnchor.LowerLeft,
                 Accent);
-            _movementText.rectTransform.anchorMin = new Vector2(0f, 0f);
-            _movementText.rectTransform.anchorMax = new Vector2(1f, 1f);
-            _movementText.rectTransform.offsetMin = new Vector2(206f, 18f);
+            _movementText.rectTransform.anchorMin = Vector2.zero;
+            _movementText.rectTransform.anchorMax = Vector2.one;
+            _movementText.rectTransform.offsetMin = new Vector2(188f, 18f);
             _movementText.rectTransform.offsetMax = new Vector2(-14f, -128f);
         }
 
@@ -667,6 +723,7 @@ namespace Trpg.Pawns
         private void BuildRightPanel()
         {
             AddBorder(RightContent);
+
             _rightTabs = CreateSurface(
                 "RightTabs",
                 RightContent,
@@ -676,7 +733,7 @@ namespace Trpg.Pawns
             _statsTab = CreateButton(
                 "StatsTab",
                 _rightTabs,
-                "능력치",
+                "상세보기",
                 14);
             _skillsTab = CreateButton(
                 "SkillsTab",
@@ -690,10 +747,39 @@ namespace Trpg.Pawns
             _skillsTab.onClick.AddListener(
                 () => RightPaneRequested?.Invoke(BoardRightPane.Skills));
 
+            _rightActionBar = CreateSurface(
+                "RightActionBar",
+                RightContent,
+                SurfaceElement);
+            SetBottomStretch(
+                _rightActionBar,
+                0f,
+                0f,
+                ActionBarHeight);
+
+            _checkRollButton = CreateButton(
+                "CheckRollButton",
+                _rightActionBar,
+                "판정 굴림",
+                14);
+            _effectRollButton = CreateButton(
+                "EffectRollButton",
+                _rightActionBar,
+                "효과 굴림",
+                14);
+            PlaceHalf(_checkRollButton, 0f, 0.5f);
+            PlaceHalf(_effectRollButton, 0.5f, 1f);
+            _checkRollButton.onClick.AddListener(
+                () => CheckRollRequested?.Invoke());
+            _effectRollButton.onClick.AddListener(
+                () => EffectRollRequested?.Invoke());
+
             var body = CreateRect("RightBody", RightContent);
             body.anchorMin = Vector2.zero;
             body.anchorMax = Vector2.one;
-            body.offsetMin = new Vector2(InnerPadding, InnerPadding);
+            body.offsetMin = new Vector2(
+                InnerPadding,
+                ActionBarHeight + InnerPadding);
             body.offsetMax = new Vector2(
                 -InnerPadding,
                 -(TabBarHeight + InnerPadding));
@@ -734,44 +820,36 @@ namespace Trpg.Pawns
                 RollWidth,
                 RollHeight);
 
-            DropPromptHost = CreateRect(
+            DropPromptHost = CreateSurface(
                 "DropPromptHost",
-                RollOverlayContent);
-            Stretch(DropPromptHost, 0f);
-            var dropSurface = DropPromptHost.gameObject.AddComponent<Image>();
-            dropSurface.color = new Color(0.04f, 0.16f, 0.19f, 0.96f);
+                RollOverlayContent,
+                SurfaceElement);
+            Stretch(DropPromptHost, 16f);
             var dropTarget = DropPromptHost.gameObject.AddComponent<
                 BoardUiRollDropTarget>();
-            dropTarget.SourceDropped += source =>
-                SourceDropped?.Invoke(source);
+            dropTarget.SourceDropped +=
+                source => SourceDropped?.Invoke(source);
 
-            var dropTitle = CreateText(
-                "DropTitle",
+            _dragSourceText = CreateText(
+                "DragSourceText",
                 DropPromptHost,
-                22,
+                19,
                 FontStyle.Bold,
                 TextAnchor.MiddleCenter,
                 TextMain);
-            dropTitle.text = "판정 굴림";
-            SetTopStretch(
-                dropTitle.rectTransform,
-                28f,
-                44f,
-                42f);
-
-            _dragSourceText = CreateText(
-                "DragSource",
-                DropPromptHost,
-                17,
-                FontStyle.Bold,
-                TextAnchor.MiddleCenter,
-                Accent);
-            Stretch(_dragSourceText.rectTransform, 36f);
-            _dragSourceText.text = "스탯 또는 기술을 여기에 드롭";
+            Stretch(_dragSourceText.rectTransform, 20f);
+            _dragSourceText.text =
+                "능력치 또는 기술 블록을 여기에 드롭";
 
             RollHost = CreateRect("RollHost", RollOverlayContent);
-            Stretch(RollHost, 0f);
+            Stretch(RollHost, 16f);
             BuildRollView();
+
+            _effectRollHost = CreateRect(
+                "EffectRollHost",
+                RollOverlayContent);
+            Stretch(_effectRollHost, 16f);
+            BuildEffectRollView();
         }
 
         private void BuildRollView()
@@ -779,22 +857,22 @@ namespace Trpg.Pawns
             var title = CreateText(
                 "RollTitle",
                 RollHost,
-                22,
+                21,
                 FontStyle.Bold,
                 TextAnchor.MiddleLeft,
                 TextMain);
             title.text = "판정 굴림";
-            SetTopStretch(title.rectTransform, 18f, 12f, 40f);
+            SetTopStretch(title.rectTransform, 0f, 0f, 38f);
 
             var sourceSurface = CreateSurface(
                 "SourceSurface",
                 RollHost,
                 SurfaceElement);
-            SetTopStretch(sourceSurface, 18f, 58f, 52f);
+            SetTopStretch(sourceSurface, 0f, 48f, 54f);
             _sourceText = CreateText(
                 "Source",
                 sourceSurface,
-                16,
+                15,
                 FontStyle.Bold,
                 TextAnchor.MiddleLeft,
                 TextMain);
@@ -808,11 +886,7 @@ namespace Trpg.Pawns
                 TextAnchor.MiddleLeft,
                 TextMuted);
             difficultyLabel.text = "난이도";
-            SetTopStretch(
-                difficultyLabel.rectTransform,
-                18f,
-                120f,
-                24f);
+            SetTopStretch(difficultyLabel.rectTransform, 0f, 112f, 24f);
 
             _regularButton = CreateButton(
                 "Regular",
@@ -833,7 +907,7 @@ namespace Trpg.Pawns
                 _regularButton,
                 _hardButton,
                 _extremeButton,
-                148f,
+                142f,
                 42f);
             _regularButton.onClick.AddListener(
                 () => SelectDifficulty(PawnCheckDifficulty.Regular));
@@ -845,16 +919,45 @@ namespace Trpg.Pawns
             _targetText = CreateText(
                 "Target",
                 RollHost,
-                15,
+                14,
                 FontStyle.Bold,
                 TextAnchor.MiddleLeft,
                 Accent);
-            SetTopStretch(_targetText.rectTransform, 18f, 198f, 30f);
+            SetTopStretch(_targetText.rectTransform, 0f, 194f, 28f);
+
+            var diceLabel = CreateText(
+                "DiceLabel",
+                RollHost,
+                13,
+                FontStyle.Bold,
+                TextAnchor.MiddleLeft,
+                TextMuted);
+            diceLabel.text = "보너스/패널티 주사위";
+            SetTopSpan(
+                diceLabel.rectTransform,
+                0f,
+                0.62f,
+                228f,
+                24f);
+
+            _bonusPenaltyText = CreateText(
+                "BonusPenaltyValue",
+                RollHost,
+                13,
+                FontStyle.Bold,
+                TextAnchor.MiddleRight,
+                TextMuted);
+            SetTopSpan(
+                _bonusPenaltyText.rectTransform,
+                0.58f,
+                1f,
+                228f,
+                24f);
 
             var penalty = CreateButton(
                 "Penalty",
                 RollHost,
-                "◀ 페널티",
+                "◀ 패널티",
                 13);
             var neutral = CreateButton(
                 "Neutral",
@@ -866,23 +969,15 @@ namespace Trpg.Pawns
                 RollHost,
                 "보너스 ▶",
                 13);
-            PlaceThreeAtTop(penalty, neutral, bonus, 234f, 40f);
+            PlaceThreeAtTop(
+                penalty,
+                neutral,
+                bonus,
+                258f,
+                38f);
             penalty.onClick.AddListener(() => ChangeBonusPenalty(-1));
             neutral.onClick.AddListener(() => SetBonusPenalty(0));
             bonus.onClick.AddListener(() => ChangeBonusPenalty(1));
-
-            _bonusPenaltyText = CreateText(
-                "BonusPenalty",
-                RollHost,
-                13,
-                FontStyle.Normal,
-                TextAnchor.MiddleCenter,
-                TextMuted);
-            SetTopStretch(
-                _bonusPenaltyText.rectTransform,
-                18f,
-                278f,
-                24f);
 
             _rollButton = CreateButton(
                 "RollButton",
@@ -890,12 +985,12 @@ namespace Trpg.Pawns
                 "굴리기",
                 16,
                 Accent);
-            var rollRect = _rollButton.transform as RectTransform;
-            rollRect.anchorMin = new Vector2(0f, 0f);
-            rollRect.anchorMax = new Vector2(1f, 0f);
-            rollRect.pivot = new Vector2(0.5f, 0f);
-            rollRect.anchoredPosition = new Vector2(0f, 16f);
-            rollRect.sizeDelta = new Vector2(-36f, 48f);
+            SetBottomLeft(
+                _rollButton.transform as RectTransform,
+                0f,
+                0f,
+                174f,
+                42f);
             _rollButton.onClick.AddListener(
                 () => RollRequested?.Invoke());
 
@@ -904,15 +999,243 @@ namespace Trpg.Pawns
                 RollHost,
                 "밀어붙이기",
                 13);
+            SetBottomRight(
+                _pushButton.transform as RectTransform,
+                98f,
+                0f,
+                118f,
+                42f);
             _luckButton = CreateButton(
                 "LuckButton",
                 RollHost,
                 "운 사용",
                 13);
-            _pushButton.gameObject.SetActive(false);
-            _luckButton.gameObject.SetActive(false);
+            SetBottomRight(
+                _luckButton.transform as RectTransform,
+                0f,
+                0f,
+                90f,
+                42f);
+            _pushButton.interactable = false;
+            _luckButton.interactable = false;
             SetBonusPenalty(0);
             ClearSource();
+        }
+
+        private void BuildEffectRollView()
+        {
+            var title = CreateText(
+                "EffectRollTitle",
+                _effectRollHost,
+                21,
+                FontStyle.Bold,
+                TextAnchor.MiddleLeft,
+                TextMain);
+            title.text = "효과 굴림";
+            SetTopStretch(title.rectTransform, 0f, 0f, 38f);
+
+            var prompt = CreateText(
+                "EffectRollPrompt",
+                _effectRollHost,
+                13,
+                FontStyle.Bold,
+                TextAnchor.MiddleLeft,
+                TextMuted);
+            prompt.text = "주사위 식과 보정치를 입력";
+            SetTopStretch(prompt.rectTransform, 0f, 42f, 28f);
+
+            _effectDiceCountInput = CreateIntegerInput(
+                "DiceCountInput",
+                _effectRollHost,
+                "개수 N",
+                0f,
+                0.31f,
+                82f);
+            _effectDiceSidesInput = CreateIntegerInput(
+                "DiceSidesInput",
+                _effectRollHost,
+                "면수 d",
+                0.345f,
+                0.655f,
+                82f);
+            _effectModifierInput = CreateIntegerInput(
+                "ModifierInput",
+                _effectRollHost,
+                "보정",
+                0.69f,
+                1f,
+                82f);
+
+            var expressionHelp = CreateText(
+                "ExpressionHelp",
+                _effectRollHost,
+                14,
+                FontStyle.Bold,
+                TextAnchor.MiddleCenter,
+                TextMain);
+            expressionHelp.text = "N d 면수 + 보정";
+            SetTopStretch(expressionHelp.rectTransform, 0f, 150f, 34f);
+
+            _effectValidationText = CreateText(
+                "EffectValidation",
+                _effectRollHost,
+                12,
+                FontStyle.Bold,
+                TextAnchor.MiddleLeft,
+                new Color(1f, 0.48f, 0.40f, 1f));
+            SetTopStretch(
+                _effectValidationText.rectTransform,
+                0f,
+                194f,
+                42f);
+
+            var cancelButton = CreateButton(
+                "EffectCancelButton",
+                _effectRollHost,
+                "취소",
+                14);
+            SetBottomLeft(
+                cancelButton.transform as RectTransform,
+                0f,
+                0f,
+                132f,
+                46f);
+            cancelButton.onClick.AddListener(
+                () => RollOverlayCloseRequested?.Invoke());
+
+            var confirmButton = CreateButton(
+                "EffectConfirmButton",
+                _effectRollHost,
+                "굴리기",
+                16,
+                Accent);
+            SetBottomRight(
+                confirmButton.transform as RectTransform,
+                0f,
+                0f,
+                176f,
+                46f);
+            confirmButton.onClick.AddListener(ConfirmEffectRoll);
+        }
+
+        private InputField CreateIntegerInput(
+            string name,
+            RectTransform parent,
+            string placeholder,
+            float anchorMinX,
+            float anchorMaxX,
+            float top)
+        {
+            var root = new GameObject(
+                name,
+                typeof(RectTransform),
+                typeof(CanvasRenderer),
+                typeof(Image),
+                typeof(InputField));
+            var rect = root.GetComponent<RectTransform>();
+            rect.SetParent(parent, false);
+            rect.anchorMin = new Vector2(anchorMinX, 1f);
+            rect.anchorMax = new Vector2(anchorMaxX, 1f);
+            rect.pivot = new Vector2(0.5f, 1f);
+            rect.anchoredPosition = new Vector2(0f, -top);
+            rect.sizeDelta = new Vector2(-4f, 56f);
+
+            var image = root.GetComponent<Image>();
+            image.color = SurfaceElement;
+            AddBorder(rect);
+
+            var valueText = CreateText(
+                "Text",
+                rect,
+                16,
+                FontStyle.Bold,
+                TextAnchor.MiddleCenter,
+                TextMain);
+            valueText.resizeTextForBestFit = true;
+            valueText.resizeTextMinSize = 11;
+            valueText.resizeTextMaxSize = 16;
+            Stretch(valueText.rectTransform, 6f);
+
+            var placeholderText = CreateText(
+                "Placeholder",
+                rect,
+                12,
+                FontStyle.Normal,
+                TextAnchor.MiddleCenter,
+                TextMuted);
+            placeholderText.text = placeholder;
+            placeholderText.fontStyle = FontStyle.Italic;
+            Stretch(placeholderText.rectTransform, 6f);
+
+            var input = root.GetComponent<InputField>();
+            input.targetGraphic = image;
+            input.textComponent = valueText;
+            input.placeholder = placeholderText;
+            input.contentType = InputField.ContentType.IntegerNumber;
+            input.lineType = InputField.LineType.SingleLine;
+            input.characterLimit = 5;
+            return input;
+        }
+
+        private void ConfirmEffectRoll()
+        {
+            if (!TryParseEffectValue(
+                    _effectDiceCountInput.text,
+                    1,
+                    PawnRollService.MaximumDiceCount,
+                    out var diceCount))
+            {
+                _effectValidationText.text =
+                    $"주사위 개수는 1~{PawnRollService.MaximumDiceCount} 사이로 입력해줘.";
+                return;
+            }
+
+            if (!TryParseEffectValue(
+                    _effectDiceSidesInput.text,
+                    2,
+                    PawnRollService.MaximumDiceSides,
+                    out var diceSides))
+            {
+                _effectValidationText.text =
+                    $"주사위 면수는 2~{PawnRollService.MaximumDiceSides} 사이로 입력해줘.";
+                return;
+            }
+
+            if (!int.TryParse(
+                    _effectModifierInput.text,
+                    out var modifier))
+            {
+                _effectValidationText.text =
+                    "보정치는 정수로 입력해줘.";
+                return;
+            }
+
+            _effectValidationText.text = string.Empty;
+            EffectRollConfirmed?.Invoke(
+                new PawnEffectRollRequest(
+                    diceCount,
+                    diceSides,
+                    Mathf.Clamp(modifier, -999, 999)));
+        }
+
+        private static bool TryParseEffectValue(
+            string text,
+            int minimum,
+            int maximum,
+            out int value)
+        {
+            return int.TryParse(text, out value) &&
+                   value >= minimum &&
+                   value <= maximum;
+        }
+
+        private void RefreshIdentitySummary()
+        {
+            if (_identityDetailText == null)
+                return;
+
+            _identityDetailText.text =
+                $"{_nameText.text}\n{_jobText.text}\n\n{_movementText.text}";
         }
 
         private void SelectDifficulty(PawnCheckDifficulty difficulty)
@@ -952,31 +1275,42 @@ namespace Trpg.Pawns
         private void SetBonusPenalty(int value)
         {
             _bonusPenalty = Mathf.Clamp(value, -2, 2);
-            _bonusPenaltyText.text = _bonusPenalty < 0
-                ? $"페널티 {Mathf.Abs(_bonusPenalty)}"
-                : _bonusPenalty > 0
-                    ? $"보너스 {_bonusPenalty}"
-                    : "보너스·페널티 없음";
+            if (_bonusPenalty < 0)
+            {
+                _bonusPenaltyText.text =
+                    $"{Mathf.Abs(_bonusPenalty)} 패널티";
+                _bonusPenaltyText.color =
+                    new Color(1f, 0.36f, 0.28f, 1f);
+            }
+            else if (_bonusPenalty > 0)
+            {
+                _bonusPenaltyText.text = $"{_bonusPenalty} 보너스";
+                _bonusPenaltyText.color = Accent;
+            }
+            else
+            {
+                _bonusPenaltyText.text = "없음";
+                _bonusPenaltyText.color = TextMuted;
+            }
             BonusPenaltyChanged?.Invoke(_bonusPenalty);
-        }
-
-        public void BringTabsToFront()
-        {
-            if (_leftTabs != null)
-                _leftTabs.SetAsLastSibling();
-            if (_rightTabs != null)
-                _rightTabs.SetAsLastSibling();
         }
 
         private void ApplyBand(BoardUiWidthBand band)
         {
             var minimal = band == BoardUiWidthBand.Minimal;
-            _identityTab.GetComponentInChildren<Text>().text =
-                minimal ? "인물" : "인물";
-            _inventoryTab.GetComponentInChildren<Text>().text =
-                minimal ? "가방" : "가방";
-            _profileTab.GetComponentInChildren<Text>().text =
-                minimal ? "정보" : "캐릭터 정보";
+            SetButtonLabel(_identityTab, "인물");
+            SetButtonLabel(_inventoryTab, "가방");
+            SetButtonLabel(
+                _profileTab,
+                minimal ? "정보" : "캐릭터 정보");
+            SetButtonLabel(_statsTab, "상세보기");
+            SetButtonLabel(_skillsTab, "기술");
+            SetButtonLabel(
+                _checkRollButton,
+                minimal ? "판정" : "판정 굴림");
+            SetButtonLabel(
+                _effectRollButton,
+                minimal ? "효과" : "효과 굴림");
             _nameText.fontSize = minimal ? 20 : 24;
             _jobText.fontSize = minimal ? 12 : 14;
         }
@@ -1000,6 +1334,7 @@ namespace Trpg.Pawns
             image.color = color ?? SurfaceElement;
             var button = root.GetComponent<Button>();
             button.targetGraphic = image;
+            button.transition = Selectable.Transition.ColorTint;
 
             var text = CreateText(
                 "Label",
@@ -1008,6 +1343,12 @@ namespace Trpg.Pawns
                 FontStyle.Bold,
                 TextAnchor.MiddleCenter,
                 TextMain);
+            text.text = label;
+            text.horizontalOverflow = HorizontalWrapMode.Overflow;
+            text.verticalOverflow = VerticalWrapMode.Overflow;
+            text.resizeTextForBestFit = true;
+            text.resizeTextMinSize = 10;
+            text.resizeTextMaxSize = size;
             Stretch(text.rectTransform, 4f);
             return button;
         }
@@ -1033,10 +1374,19 @@ namespace Trpg.Pawns
             text.fontStyle = style;
             text.alignment = alignment;
             text.color = color;
-            text.raycastTarget = false;
             text.horizontalOverflow = HorizontalWrapMode.Wrap;
-            text.verticalOverflow = VerticalWrapMode.Truncate;
+            text.verticalOverflow = VerticalWrapMode.Overflow;
+            text.raycastTarget = false;
             return text;
+        }
+
+        private static void SetButtonLabel(Button button, string value)
+        {
+            if (button == null)
+                return;
+            var label = button.GetComponentInChildren<Text>(true);
+            if (label != null)
+                label.text = value;
         }
 
         private static RectTransform CreateRect(
@@ -1101,6 +1451,12 @@ namespace Trpg.Pawns
             if (host == null)
                 return;
             host.gameObject.SetActive(active);
+            var group = host.GetComponent<CanvasGroup>();
+            if (group == null)
+                group = host.gameObject.AddComponent<CanvasGroup>();
+            group.alpha = active ? 1f : 0f;
+            group.interactable = active;
+            group.blocksRaycasts = active;
         }
 
         private static void SetSelected(Button button, bool selected)
@@ -1109,9 +1465,7 @@ namespace Trpg.Pawns
                 return;
             var image = button.targetGraphic as Image;
             if (image != null)
-            {
                 image.color = selected ? Accent : SurfaceElement;
-            }
         }
 
         private static void PlaceThird(
@@ -1202,6 +1556,20 @@ namespace Trpg.Pawns
             rect.sizeDelta = new Vector2(-horizontal * 2f, height);
         }
 
+        private static void SetTopSpan(
+            RectTransform rect,
+            float anchorMinX,
+            float anchorMaxX,
+            float top,
+            float height)
+        {
+            rect.anchorMin = new Vector2(anchorMinX, 1f);
+            rect.anchorMax = new Vector2(anchorMaxX, 1f);
+            rect.pivot = new Vector2(0.5f, 1f);
+            rect.anchoredPosition = new Vector2(0f, -top);
+            rect.sizeDelta = new Vector2(-4f, height);
+        }
+
         private static void SetBottomStretch(
             RectTransform rect,
             float horizontal,
@@ -1224,41 +1592,6 @@ namespace Trpg.Pawns
             rect.offsetMin = new Vector2(padding, padding);
             rect.offsetMax = new Vector2(-padding, -padding);
             rect.localScale = Vector3.one;
-        }
-    }
-
-    [DisallowMultipleComponent]
-    public sealed class BoardUiRollSourceDragRelay : MonoBehaviour,
-        IBeginDragHandler,
-        IEndDragHandler
-    {
-        private PawnRollSourceWidget _source;
-        private Action<PawnCheckSourceData> _begin;
-        private Action _end;
-
-        public void Configure(
-            PawnRollSourceWidget source,
-            Action<PawnCheckSourceData> begin,
-            Action end)
-        {
-            _source = source;
-            _begin = begin;
-            _end = end;
-        }
-
-        public void OnBeginDrag(PointerEventData eventData)
-        {
-            if (_source != null &&
-                _source.TryGetData(out var source) &&
-                source.IsValid)
-            {
-                _begin?.Invoke(source);
-            }
-        }
-
-        public void OnEndDrag(PointerEventData eventData)
-        {
-            _end?.Invoke();
         }
     }
 
@@ -1305,18 +1638,19 @@ namespace Trpg.Pawns
         public void OnPointerEnter(PointerEventData eventData)
         {
             if (_image != null)
-                _image.color = AccentColor();
+            {
+                _image.color = new Color(
+                    0.05f,
+                    0.30f,
+                    0.36f,
+                    0.98f);
+            }
         }
 
         public void OnPointerExit(PointerEventData eventData)
         {
             if (_image != null)
                 _image.color = _baseColor;
-        }
-
-        private static Color AccentColor()
-        {
-            return new Color(0.05f, 0.30f, 0.36f, 0.98f);
         }
     }
 }

@@ -56,8 +56,6 @@ namespace Trpg.Pawns
     public sealed class PawnRollWidget : MonoBehaviour
     {
         private const float MinimumPresentationDuration = 0.25f;
-        private const float FastTickSeconds = 0.022f;
-        private const float SlowTickSeconds = 0.22f;
         private const float PanelOpenDuration = 0.24f;
         private const int MaximumVisibleOutcomeLabels = 100;
         private const float MinimumActionButtonSize = 54f;
@@ -90,6 +88,7 @@ namespace Trpg.Pawns
         private bool _listenersBound;
         private bool _ownsRuntimeAudioClips;
         private bool _buttonsOpen;
+        private bool _actionButtonsVisible = true;
         private RectTransform _canvasRect;
         private RectTransform _hostPanelRect;
         private RectTransform _moveButtonRect;
@@ -105,6 +104,8 @@ namespace Trpg.Pawns
         private int _defaultDiceModifier;
         private bool _showsCheckThresholds;
         private D100CheckThresholds _activeCheckThresholds;
+        private int _presentationSerial;
+        private int _lastPresentedSelection = int.MinValue;
 
         public event Action RollInputOpened;
         public event Action<PawnCheckRollRequest> CheckRollRequested;
@@ -187,6 +188,12 @@ namespace Trpg.Pawns
             }
 
             _inputWidget?.SetInteractionEnabled(enabled);
+        }
+
+        public void SetActionButtonsVisible(bool visible)
+        {
+            _actionButtonsVisible = visible;
+            SetButtonPositions(_buttonsOpen);
         }
 
         public void SetInputDefaults(
@@ -340,75 +347,157 @@ namespace Trpg.Pawns
                         _activeCheckThresholds.GetGrade(minimum))
                     : Color.white;
                 _counterText.text = minimum.ToString();
+                _counterText.rectTransform.localScale = Vector3.one;
             }
 
+            var visualRandom = CreateVisualRandom(finalValue);
             var finalIndex = finalValue - minimum;
             var finalRatio =
                 (finalIndex + 0.5f) / outcomeCount;
+            var slotAngle = 360f / outcomeCount;
+            var approachSlots = ResolveApproachSlotCount(
+                visualRandom,
+                outcomeCount);
+            var hesitationSlots = ResolveHesitationSlotDistance(
+                visualRandom,
+                outcomeCount,
+                approachSlots);
+            var overshootSlots = outcomeCount > 1
+                ? NextFloat(visualRandom, 0.34f, 0.48f)
+                : 0f;
+            var extraRotations = visualRandom.Next(0, 3);
+            var spinRotations = Mathf.Max(
+                1f,
+                Mathf.Ceil(pointerRotations) + extraRotations);
+
             var finalAngle =
-                -360f * (pointerRotations + finalRatio);
-            var elapsed = 0f;
-            var nextTickAt = 0f;
+                -360f * (spinRotations + finalRatio);
+            var approachStartAngle =
+                finalAngle + slotAngle * approachSlots;
+            var hesitationAngle =
+                finalAngle + slotAngle * hesitationSlots;
+            var overshootAngle =
+                finalAngle - slotAngle * overshootSlots;
 
-            while (elapsed < duration)
-            {
-                elapsed += Time.unscaledDeltaTime;
-                var normalized = Mathf.Clamp01(elapsed / duration);
-                var eased =
-                    1f -
-                    Mathf.Pow(
-                        1f - normalized,
-                        decelerationExponent);
+            var spinWeight =
+                NextFloat(visualRandom, 0.46f, 0.52f);
+            var approachWeight =
+                NextFloat(visualRandom, 0.23f, 0.29f);
+            var hesitationWeight =
+                NextFloat(visualRandom, 0.035f, 0.055f);
+            var revealWeight =
+                NextFloat(visualRandom, 0.15f, 0.20f);
+            var settleWeight =
+                NextFloat(visualRandom, 0.055f, 0.080f);
+            var totalWeight =
+                spinWeight +
+                approachWeight +
+                hesitationWeight +
+                revealWeight +
+                settleWeight;
 
-                if (elapsed >= nextTickAt)
-                {
-                    PlayOneShot(_tickClip, 0.34f);
-                    var tickBlend = normalized * normalized;
-                    nextTickAt = elapsed + Mathf.Lerp(
-                        FastTickSeconds,
-                        SlowTickSeconds,
-                        tickBlend);
-                }
+            var spinDuration = duration * spinWeight / totalWeight;
+            var approachDuration =
+                duration * approachWeight / totalWeight;
+            var hesitationDuration =
+                duration * hesitationWeight / totalWeight;
+            var revealDuration =
+                duration * revealWeight / totalWeight;
+            var settleDuration =
+                duration * settleWeight / totalWeight;
 
-                if (_counterText != null)
-                {
-                    _counterText.rectTransform.localScale =
-                        Vector3.Lerp(
-                            _counterText.rectTransform.localScale,
-                            Vector3.one,
-                            Mathf.Clamp01(
-                                Time.unscaledDeltaTime * 20f));
-                }
+            _lastPresentedSelection = minimum;
+            yield return AnimatePointerSegment(
+                0f,
+                approachStartAngle,
+                spinDuration,
+                minimum,
+                maximum,
+                outcomeCount,
+                NextFloat(visualRandom, 1.22f, 1.58f),
+                false,
+                slotAngle * NextFloat(
+                    visualRandom,
+                    0.035f,
+                    0.075f),
+                visualRandom.Next(8, 14),
+                0.26f,
+                1.04f);
 
-                if (_pointer != null)
-                {
-                    var remaining = 1f - normalized;
-                    var vibration =
-                        Mathf.Sin(normalized * Mathf.PI * 48f) *
-                        remaining * 3.5f;
-                    var pointerAngle =
-                        finalAngle * eased + vibration;
-                    _pointer.localEulerAngles = new Vector3(
-                        0f,
-                        0f,
-                        pointerAngle);
-                    UpdateCurrentSelection(
-                        minimum,
-                        maximum,
-                        outcomeCount,
-                        pointerAngle);
-                }
+            yield return AnimatePointerSegment(
+                approachStartAngle,
+                hesitationAngle,
+                approachDuration,
+                minimum,
+                maximum,
+                outcomeCount,
+                NextFloat(visualRandom, 2.0f, 2.8f),
+                false,
+                slotAngle * NextFloat(
+                    visualRandom,
+                    0.010f,
+                    0.028f),
+                visualRandom.Next(3, 6),
+                0.34f,
+                1.07f);
 
-                yield return null;
-            }
+            yield return AnimatePointerHesitation(
+                hesitationAngle,
+                hesitationDuration,
+                minimum,
+                maximum,
+                outcomeCount,
+                slotAngle * NextFloat(
+                    visualRandom,
+                    0.045f,
+                    0.085f),
+                NextFloat(visualRandom, 1.15f, 1.85f));
 
-            if (_pointer != null)
-            {
-                _pointer.localEulerAngles = new Vector3(
-                    0f,
-                    0f,
-                    finalAngle);
-            }
+            yield return AnimatePointerSegment(
+                hesitationAngle,
+                overshootAngle,
+                revealDuration,
+                minimum,
+                maximum,
+                outcomeCount,
+                Mathf.Clamp(
+                    decelerationExponent * NextFloat(
+                        visualRandom,
+                        0.72f,
+                        0.95f),
+                    2.2f,
+                    5.5f),
+                false,
+                slotAngle * NextFloat(
+                    visualRandom,
+                    0.004f,
+                    0.014f),
+                visualRandom.Next(1, 3),
+                0.46f,
+                1.11f);
+
+            yield return AnimatePointerSegment(
+                overshootAngle,
+                finalAngle,
+                settleDuration,
+                minimum,
+                maximum,
+                outcomeCount,
+                1f,
+                true,
+                0f,
+                0,
+                0.40f,
+                1.08f);
+
+            ApplyPointerPresentation(
+                finalAngle,
+                minimum,
+                maximum,
+                outcomeCount,
+                0f,
+                1f,
+                false);
 
             if (_counterText != null)
             {
@@ -444,6 +533,293 @@ namespace Trpg.Pawns
             _presentationRoutine = null;
             MoveButtons(false);
             PresentationCompleted?.Invoke();
+        }
+
+        private IEnumerator AnimatePointerSegment(
+            float startAngle,
+            float endAngle,
+            float duration,
+            int minimum,
+            int maximum,
+            int outcomeCount,
+            float easeExponent,
+            bool smoothStep,
+            float wobbleAmplitude,
+            int wobbleCycles,
+            float tickVolume,
+            float pulseScale)
+        {
+            if (duration <= 0f)
+            {
+                ApplyPointerPresentation(
+                    endAngle,
+                    minimum,
+                    maximum,
+                    outcomeCount,
+                    tickVolume,
+                    pulseScale,
+                    true);
+                yield break;
+            }
+
+            var elapsed = 0f;
+            while (elapsed < duration)
+            {
+                elapsed += Time.unscaledDeltaTime;
+                var normalized = Mathf.Clamp01(elapsed / duration);
+                var eased = smoothStep
+                    ? normalized * normalized *
+                        (3f - 2f * normalized)
+                    : 1f - Mathf.Pow(
+                        1f - normalized,
+                        Mathf.Max(1f, easeExponent));
+                var angle = Mathf.LerpUnclamped(
+                    startAngle,
+                    endAngle,
+                    eased);
+
+                if (wobbleAmplitude > 0f && wobbleCycles > 0)
+                {
+                    var envelope =
+                        Mathf.Sin(normalized * Mathf.PI);
+                    angle += Mathf.Sin(
+                        normalized * Mathf.PI * 2f *
+                        wobbleCycles) *
+                        wobbleAmplitude *
+                        envelope;
+                }
+
+                ApplyPointerPresentation(
+                    angle,
+                    minimum,
+                    maximum,
+                    outcomeCount,
+                    tickVolume,
+                    pulseScale,
+                    true);
+                RelaxCounterScale();
+                yield return null;
+            }
+
+            ApplyPointerPresentation(
+                endAngle,
+                minimum,
+                maximum,
+                outcomeCount,
+                tickVolume,
+                pulseScale,
+                true);
+        }
+
+        private IEnumerator AnimatePointerHesitation(
+            float centerAngle,
+            float duration,
+            int minimum,
+            int maximum,
+            int outcomeCount,
+            float wobbleAmplitude,
+            float wobbleCycles)
+        {
+            if (duration <= 0f)
+            {
+                yield break;
+            }
+
+            var elapsed = 0f;
+            while (elapsed < duration)
+            {
+                elapsed += Time.unscaledDeltaTime;
+                var normalized = Mathf.Clamp01(elapsed / duration);
+                var envelope =
+                    Mathf.Sin(normalized * Mathf.PI);
+                var angle = centerAngle +
+                    Mathf.Sin(
+                        normalized * Mathf.PI * 2f *
+                        wobbleCycles) *
+                    wobbleAmplitude *
+                    envelope;
+
+                ApplyPointerPresentation(
+                    angle,
+                    minimum,
+                    maximum,
+                    outcomeCount,
+                    0.38f,
+                    1.08f,
+                    true);
+                RelaxCounterScale();
+                yield return null;
+            }
+
+            ApplyPointerPresentation(
+                centerAngle,
+                minimum,
+                maximum,
+                outcomeCount,
+                0.38f,
+                1.08f,
+                true);
+        }
+
+        private void ApplyPointerPresentation(
+            float pointerAngle,
+            int minimum,
+            int maximum,
+            int outcomeCount,
+            float tickVolume,
+            float pulseScale,
+            bool playTick)
+        {
+            if (_pointer != null)
+            {
+                _pointer.localEulerAngles = new Vector3(
+                    0f,
+                    0f,
+                    pointerAngle);
+            }
+
+            var value = ResolvePointerValue(
+                minimum,
+                outcomeCount,
+                pointerAngle);
+            if (value == _lastPresentedSelection)
+            {
+                return;
+            }
+
+            _lastPresentedSelection = value;
+            UpdateCurrentSelection(
+                minimum,
+                maximum,
+                outcomeCount,
+                pointerAngle);
+            if (_counterText != null)
+            {
+                _counterText.rectTransform.localScale =
+                    Vector3.one * Mathf.Max(1f, pulseScale);
+            }
+
+            if (playTick && tickVolume > 0f)
+            {
+                PlayOneShot(_tickClip, tickVolume);
+            }
+        }
+
+        private void RelaxCounterScale()
+        {
+            if (_counterText == null)
+            {
+                return;
+            }
+
+            _counterText.rectTransform.localScale =
+                Vector3.Lerp(
+                    _counterText.rectTransform.localScale,
+                    Vector3.one,
+                    Mathf.Clamp01(
+                        Time.unscaledDeltaTime * 18f));
+        }
+
+        private System.Random CreateVisualRandom(int finalValue)
+        {
+            _presentationSerial++;
+            var seed = unchecked(
+                Environment.TickCount ^
+                GetInstanceID() ^
+                finalValue * 73856093 ^
+                _presentationSerial * 19349663);
+            return new System.Random(seed);
+        }
+
+        private static int ResolveApproachSlotCount(
+            System.Random random,
+            int outcomeCount)
+        {
+            if (outcomeCount <= 1)
+            {
+                return 0;
+            }
+
+            int minimumSlots;
+            int maximumSlots;
+            if (outcomeCount >= 50)
+            {
+                minimumSlots = 6;
+                maximumSlots = 12;
+            }
+            else if (outcomeCount >= 20)
+            {
+                minimumSlots = 4;
+                maximumSlots = 8;
+            }
+            else if (outcomeCount >= 8)
+            {
+                minimumSlots = 3;
+                maximumSlots = Mathf.Min(6, outcomeCount - 1);
+            }
+            else
+            {
+                minimumSlots = 1;
+                maximumSlots = Mathf.Max(1, outcomeCount - 1);
+            }
+
+            return random.Next(
+                minimumSlots,
+                maximumSlots + 1);
+        }
+
+        private static float ResolveHesitationSlotDistance(
+            System.Random random,
+            int outcomeCount,
+            int approachSlots)
+        {
+            if (outcomeCount <= 1 || approachSlots <= 0)
+            {
+                return 0f;
+            }
+
+            var maximumDistance = Mathf.Min(
+                2.65f,
+                Mathf.Max(0.68f, approachSlots - 0.65f));
+            var minimumDistance = Mathf.Min(
+                maximumDistance,
+                outcomeCount <= 3 ? 0.62f : 1.15f);
+            return NextFloat(
+                random,
+                minimumDistance,
+                maximumDistance);
+        }
+
+        private static float NextFloat(
+            System.Random random,
+            float minimum,
+            float maximum)
+        {
+            if (maximum <= minimum)
+            {
+                return minimum;
+            }
+
+            return Mathf.Lerp(
+                minimum,
+                maximum,
+                (float)random.NextDouble());
+        }
+
+        private static int ResolvePointerValue(
+            int minimum,
+            int outcomeCount,
+            float pointerAngle)
+        {
+            var normalizedTurn = Mathf.Repeat(
+                -pointerAngle / 360f,
+                1f);
+            var index = Mathf.Clamp(
+                Mathf.FloorToInt(
+                    normalizedTurn * outcomeCount),
+                0,
+                outcomeCount - 1);
+            return minimum + index;
         }
 
         private void BuildRuntimeUi(Font requestedFont)
@@ -1236,14 +1612,16 @@ namespace Trpg.Pawns
             {
                 _checkButtonRect.anchoredPosition =
                     _closedCheckPosition;
-                _checkButtonRect.gameObject.SetActive(!open);
+                _checkButtonRect.gameObject.SetActive(
+                    _actionButtonsVisible && !open);
             }
 
             if (_effectButtonRect != null)
             {
                 _effectButtonRect.anchoredPosition =
                     _closedEffectPosition;
-                _effectButtonRect.gameObject.SetActive(!open);
+                _effectButtonRect.gameObject.SetActive(
+                    _actionButtonsVisible && !open);
             }
         }
 

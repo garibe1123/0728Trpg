@@ -168,8 +168,12 @@ namespace Trpg.Pawns
         public void SetBoardStackMode(bool enabled)
         {
             _boardStackMode = enabled;
+            EnsureRollWidget();
+            _rollWidget?.SetActionButtonsVisible(!enabled);
+            _statPanel?.SetLegacyLauncherVisible(!enabled);
             if (enabled)
                 _statPanel?.SetExpanded(false);
+            ApplyActionButtonLayout();
             RefreshStatToggleVisual();
         }
 
@@ -910,6 +914,7 @@ namespace Trpg.Pawns
         {
             if (_rollWidget != null || _panel == null)
             {
+                _rollWidget?.SetActionButtonsVisible(!_boardStackMode);
                 ApplyActionRowContentPadding();
                 return;
             }
@@ -917,6 +922,7 @@ namespace Trpg.Pawns
             _rollWidget = PawnRollWidget.CreateRuntime(
                 _panel,
                 _movementText != null ? _movementText.font : null);
+            _rollWidget.SetActionButtonsVisible(!_boardStackMode);
             ApplyActionRowContentPadding();
         }
 
@@ -1006,6 +1012,7 @@ namespace Trpg.Pawns
             _statPanel = PawnStatPanelWidget.CreateRuntime(
                 _canvasRect,
                 _movementText != null ? _movementText.font : null);
+            _statPanel?.SetLegacyLauncherVisible(!_boardStackMode);
         }
 
         private void BindStatPanel()
@@ -1288,13 +1295,16 @@ namespace Trpg.Pawns
                 _panel.rect.width -
                 ActionRightInset -
                 minimumStartX);
-            var buttonWidth = Mathf.Min(
-                ActionButtonWidth,
-                (availableActionWidth -
-                 ActionButtonSpacing * 2f) / 3f);
-            var totalWidth =
-                buttonWidth * 3f +
-                ActionButtonSpacing * 2f;
+            var buttonWidth = _boardStackMode
+                ? Mathf.Min(ActionButtonWidth, availableActionWidth)
+                : Mathf.Min(
+                    ActionButtonWidth,
+                    (availableActionWidth -
+                     ActionButtonSpacing * 2f) / 3f);
+            var totalWidth = _boardStackMode
+                ? buttonWidth
+                : buttonWidth * 3f +
+                  ActionButtonSpacing * 2f;
             _actionGroup.anchorMin = new Vector2(1f, 0f);
             _actionGroup.anchorMax = new Vector2(1f, 0f);
             _actionGroup.pivot = new Vector2(1f, 0f);
@@ -1321,14 +1331,21 @@ namespace Trpg.Pawns
             rollRect.anchorMin = Vector2.zero;
             rollRect.anchorMax = Vector2.zero;
             rollRect.pivot = Vector2.zero;
-            rollRect.anchoredPosition = new Vector2(
-                buttonWidth +
-                ActionButtonSpacing,
-                0f);
-            rollRect.sizeDelta = new Vector2(
-                buttonWidth * 2f +
-                ActionButtonSpacing,
-                ActionButtonHeight);
+            rollRect.anchoredPosition = _boardStackMode
+                ? Vector2.zero
+                : new Vector2(
+                    buttonWidth +
+                    ActionButtonSpacing,
+                    0f);
+            rollRect.sizeDelta = _boardStackMode
+                ? Vector2.zero
+                : new Vector2(
+                    buttonWidth * 2f +
+                    ActionButtonSpacing,
+                    ActionButtonHeight);
+
+            if (_boardStackMode)
+                return;
 
             SetActionButtonRect(
                 _checkRollButtonRect,
@@ -1439,7 +1456,7 @@ namespace Trpg.Pawns
             rect.anchorMax = Vector2.one;
             rect.pivot = Vector2.one;
             rect.anchoredPosition = new Vector2(-52f, -10f);
-            rect.sizeDelta = new Vector2(38f, 38f);
+            rect.sizeDelta = new Vector2(78f, 38f);
 
             _statToggleGraphic =
                 buttonObject.GetComponent<PawnCircleGraphic>();
@@ -1462,11 +1479,11 @@ namespace Trpg.Pawns
             var label = labelObject.GetComponent<Text>();
             label.font =
                 _movementText != null ? _movementText.font : null;
-            label.fontSize = 13;
+            label.fontSize = 12;
             label.fontStyle = FontStyle.Bold;
             label.color = Color.white;
             label.alignment = TextAnchor.MiddleCenter;
-            label.text = "스탯";
+            label.text = "상세보기";
             label.raycastTarget = false;
 
             buttonObject.SetActive(false);

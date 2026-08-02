@@ -596,7 +596,7 @@ namespace Trpg.Pawns
             text.color = Color.white;
             text.alignment = alignment;
             text.horizontalOverflow = HorizontalWrapMode.Overflow;
-            text.verticalOverflow = VerticalWrapMode.Truncate;
+            text.verticalOverflow = VerticalWrapMode.Overflow;
             text.raycastTarget = false;
             return text;
         }
@@ -614,9 +614,9 @@ namespace Trpg.Pawns
         private const float DrawerHeight = 850f;
         private const float SummaryWidth = 356f;
         private const float SummaryHeight = 160f;
-        private const float EntryHeight = 40f;
+        private const float EntryHeight = 44f;
         private const float EntrySpacing = 4f;
-        private const float EntryHeaderHeight = 28f;
+        private const float EntryHeaderHeight = 32f;
         private const float DrawerTopOffset = 188f;
         private const float DrawerTransitionDuration = 0.24f;
         private const float DrawerHiddenOffset = 48f;
@@ -639,7 +639,7 @@ namespace Trpg.Pawns
         private const float RadarMinSize = 72f;
         private const float RadarMaxSize = 260f;
         private const float AxisLabelMinRadius = 34f;
-        private const float AxisLabelMaxRadius = 126f;
+        private const float AxisLabelMaxRadius = 148f;
 
         private enum LayoutFocus
         {
@@ -657,6 +657,7 @@ namespace Trpg.Pawns
             public Text HardText;
             public Text ExtremeText;
             public InputField RegularInput;
+            public PawnRollSourceWidget RollSource;
             public PawnStatEntryData Data;
         }
 
@@ -700,6 +701,8 @@ namespace Trpg.Pawns
         private EventTrigger.Entry _entryPointerExitTrigger;
         private GridLayoutGroup _grid;
         private ScrollRect _scrollRect;
+        private Scrollbar _verticalScrollbar;
+        private RectTransform _verticalScrollbarRect;
         private PawnRadarGraphic _radar;
         private CanvasGroup _drawerCanvasGroup;
         private Sequence _drawerTransition;
@@ -715,6 +718,23 @@ namespace Trpg.Pawns
         private bool _isExpanded;
         private LayoutFocus _layoutFocus;
         private EntryVisual _editingEntry;
+        private Text _titleText;
+        private bool _isEmbedded;
+        private bool _legacyLauncherVisible = true;
+        private RectTransform _embeddedStatsHost;
+        private RectTransform _embeddedSkillsHost;
+        private Transform _legacyDrawerParent;
+        private Vector2 _legacyDrawerAnchorMin;
+        private Vector2 _legacyDrawerAnchorMax;
+        private Vector2 _legacyDrawerPivot;
+        private Vector2 _legacyDrawerAnchoredPosition;
+        private Vector2 _legacyDrawerSizeDelta;
+        private Color _legacyDrawerColor;
+        private bool _legacySummaryActive;
+        private bool _legacyTitleActive;
+        private bool _legacyCloseActive;
+        private bool _legacyQuickCheckActive;
+        private bool _legacySkillToggleActive;
 
         public event Action<string, double> ValueEditRequested;
         public event Action<PawnSkillAddRequest> SkillAddRequested;
@@ -729,6 +749,8 @@ namespace Trpg.Pawns
         public event Action SummaryClicked;
 
         public bool IsExpanded => _isExpanded;
+        public bool IsEmbedded => _isEmbedded;
+        public PawnSkillPanelWidget SkillPanel => _skillPanel;
 
         public static PawnStatPanelWidget CreateRuntime(
             RectTransform canvasRect,
@@ -774,13 +796,36 @@ namespace Trpg.Pawns
 
         public void SetExpanded(bool expanded)
         {
-            var value = _isBound && expanded;
-            if (_isExpanded == value)
+            if (_isEmbedded)
+            {
+                var embeddedExpanded = _isBound;
+                if (_isExpanded != embeddedExpanded)
+                {
+                    _isExpanded = embeddedExpanded;
+                    ExpandedChanged?.Invoke(_isExpanded);
+                }
+                ApplyEmbeddedVisibility();
+                return;
+            }
+
+            var requestedExpanded =
+                _isBound && _legacyLauncherVisible && expanded;
+            if (_isExpanded == requestedExpanded)
                 return;
 
-            _isExpanded = value;
+            _isExpanded = requestedExpanded;
             ApplyExpandedState(true);
             ExpandedChanged?.Invoke(_isExpanded);
+        }
+
+        private void SetRollSourceInteraction(bool enabled)
+        {
+            for (var index = 0; index < _entries.Count; index++)
+            {
+                var source = _entries[index].RollSource;
+                if (source != null)
+                    source.SetInteractionEnabled(enabled);
+            }
         }
 
         public void ToggleExpanded()
@@ -830,6 +875,143 @@ namespace Trpg.Pawns
         {
             if (_isBound)
                 RefreshLayout();
+        }
+
+        public void SetLegacyLauncherVisible(bool visible)
+        {
+            _legacyLauncherVisible = visible;
+            if (_isEmbedded)
+            {
+                if (_summaryRect != null)
+                    _summaryRect.gameObject.SetActive(false);
+                return;
+            }
+
+            if (!visible)
+                _isExpanded = false;
+            ApplyExpandedState(false);
+        }
+
+        public void SetEmbeddedMode(
+            RectTransform statsHost,
+            RectTransform skillsHost,
+            bool enabled)
+        {
+            if (_drawerRect == null)
+                return;
+
+            if (enabled)
+            {
+                if (statsHost == null)
+                    throw new ArgumentNullException(nameof(statsHost));
+                if (skillsHost == null)
+                    throw new ArgumentNullException(nameof(skillsHost));
+
+                if (!_isEmbedded)
+                {
+                    _legacyDrawerParent = _drawerRect.parent;
+                    _legacyDrawerAnchorMin = _drawerRect.anchorMin;
+                    _legacyDrawerAnchorMax = _drawerRect.anchorMax;
+                    _legacyDrawerPivot = _drawerRect.pivot;
+                    _legacyDrawerAnchoredPosition =
+                        _drawerRect.anchoredPosition;
+                    _legacyDrawerSizeDelta = _drawerRect.sizeDelta;
+                    var drawerImage = _drawerRect.GetComponent<Image>();
+                    if (drawerImage != null)
+                        _legacyDrawerColor = drawerImage.color;
+                    _legacySummaryActive =
+                        _summaryRect != null &&
+                        _summaryRect.gameObject.activeSelf;
+                    _legacyTitleActive =
+                        _titleText != null &&
+                        _titleText.gameObject.activeSelf;
+                    _legacyCloseActive =
+                        _closeButton != null &&
+                        _closeButton.gameObject.activeSelf;
+                    _legacyQuickCheckActive =
+                        _quickCheckButton != null &&
+                        _quickCheckButton.gameObject.activeSelf;
+                    _legacySkillToggleActive =
+                        _skillToggleButton != null &&
+                        _skillToggleButton.gameObject.activeSelf;
+                }
+
+                _isEmbedded = true;
+                _embeddedStatsHost = statsHost;
+                _embeddedSkillsHost = skillsHost;
+                KillDrawerTransition();
+                KillLayoutTween();
+                gameObject.SetActive(true);
+                _drawerRect.SetParent(statsHost, false);
+                StretchToHost(_drawerRect);
+                var embeddedImage = _drawerRect.GetComponent<Image>();
+                if (embeddedImage != null)
+                    embeddedImage.color = Color.clear;
+                if (_summaryRect != null)
+                    _summaryRect.gameObject.SetActive(false);
+                if (_titleText != null)
+                    _titleText.gameObject.SetActive(false);
+                if (_closeButton != null)
+                    _closeButton.gameObject.SetActive(false);
+                if (_quickCheckButton != null)
+                    _quickCheckButton.gameObject.SetActive(false);
+                if (_skillToggleButton != null)
+                    _skillToggleButton.gameObject.SetActive(false);
+
+                _isExpanded = _isBound;
+                _layoutFocus = LayoutFocus.Default;
+                _skillPanel?.SetEmbeddedMode(skillsHost, true);
+                _skillPanel?.SetExpanded(true, false);
+                SetRollSourceInteraction(true);
+                ApplyEmbeddedVisibility();
+                RefreshLayout();
+                return;
+            }
+
+            if (!_isEmbedded)
+                return;
+
+            KillDrawerTransition();
+            KillLayoutTween();
+            _skillPanel?.SetEmbeddedMode(null, false);
+            _isEmbedded = false;
+            SetRollSourceInteraction(false);
+            _embeddedStatsHost = null;
+            _embeddedSkillsHost = null;
+            if (_legacyDrawerParent != null)
+                _drawerRect.SetParent(_legacyDrawerParent, false);
+            _drawerRect.anchorMin = _legacyDrawerAnchorMin;
+            _drawerRect.anchorMax = _legacyDrawerAnchorMax;
+            _drawerRect.pivot = _legacyDrawerPivot;
+            _drawerRect.anchoredPosition =
+                _legacyDrawerAnchoredPosition;
+            _drawerRect.sizeDelta = _legacyDrawerSizeDelta;
+            _drawerRect.localScale = Vector3.one;
+            var restoredImage = _drawerRect.GetComponent<Image>();
+            if (restoredImage != null)
+                restoredImage.color = _legacyDrawerColor;
+            if (_summaryRect != null)
+            {
+                _summaryRect.gameObject.SetActive(
+                    _legacyLauncherVisible && _legacySummaryActive);
+            }
+            if (_titleText != null)
+                _titleText.gameObject.SetActive(_legacyTitleActive);
+            if (_closeButton != null)
+                _closeButton.gameObject.SetActive(_legacyCloseActive);
+            if (_quickCheckButton != null)
+            {
+                _quickCheckButton.gameObject.SetActive(
+                    _legacyQuickCheckActive);
+            }
+            if (_skillToggleButton != null)
+            {
+                _skillToggleButton.gameObject.SetActive(
+                    _legacySkillToggleActive);
+            }
+            _isExpanded = false;
+            ApplyExpandedState(false);
+            RefreshLayout();
         }
 
         private void Build(RectTransform rect, Font font)
@@ -1069,14 +1251,14 @@ namespace Trpg.Pawns
             _drawerCanvasGroup.interactable = false;
             _drawerCanvasGroup.blocksRaycasts = false;
 
-            var title = CreateText(
+            _titleText = CreateText(
                 "Title",
                 _drawerRect,
                 21,
                 TextAnchor.MiddleLeft);
-            title.text = "캐릭터 스탯";
-            title.fontStyle = FontStyle.Bold;
-            var titleRect = title.rectTransform;
+            _titleText.text = "상세보기";
+            _titleText.fontStyle = FontStyle.Bold;
+            var titleRect = _titleText.rectTransform;
             titleRect.anchorMin = new Vector2(0f, 1f);
             titleRect.anchorMax = new Vector2(1f, 1f);
             titleRect.pivot = new Vector2(0.5f, 1f);
@@ -1292,8 +1474,9 @@ namespace Trpg.Pawns
                     13,
                     TextAnchor.MiddleCenter);
                 label.resizeTextForBestFit = true;
-                label.resizeTextMinSize = 10;
+                label.resizeTextMinSize = 8;
                 label.resizeTextMaxSize = 13;
+                label.verticalOverflow = VerticalWrapMode.Overflow;
                 label.rectTransform.sizeDelta =
                     new Vector2(88f, 44f);
                 _axisLabels.Add(label);
@@ -1369,7 +1552,61 @@ namespace Trpg.Pawns
             _scrollRect.vertical = true;
             _scrollRect.movementType =
                 ScrollRect.MovementType.Clamped;
-            _scrollRect.scrollSensitivity = 22f;
+            _scrollRect.scrollSensitivity = 30f;
+            BuildVerticalScrollbar();
+        }
+
+        private void BuildVerticalScrollbar()
+        {
+            var root = new GameObject(
+                "StatVerticalScrollbar",
+                typeof(RectTransform),
+                typeof(CanvasRenderer),
+                typeof(Image),
+                typeof(Scrollbar));
+            _verticalScrollbarRect =
+                root.GetComponent<RectTransform>();
+            _verticalScrollbarRect.SetParent(_drawerRect, false);
+            _verticalScrollbarRect.anchorMin =
+                new Vector2(1f, 0f);
+            _verticalScrollbarRect.anchorMax =
+                new Vector2(1f, 1f);
+            _verticalScrollbarRect.pivot =
+                new Vector2(1f, 0.5f);
+            _verticalScrollbarRect.offsetMin =
+                new Vector2(-18f, ViewportBottom);
+            _verticalScrollbarRect.offsetMax =
+                new Vector2(-6f, -420f);
+
+            var background = root.GetComponent<Image>();
+            background.color =
+                new Color(0.015f, 0.04f, 0.05f, 0.90f);
+
+            var handleObject = new GameObject(
+                "Handle",
+                typeof(RectTransform),
+                typeof(CanvasRenderer),
+                typeof(Image));
+            var handleRect =
+                handleObject.GetComponent<RectTransform>();
+            handleRect.SetParent(_verticalScrollbarRect, false);
+            handleRect.anchorMin = Vector2.zero;
+            handleRect.anchorMax = Vector2.one;
+            handleRect.offsetMin = new Vector2(2f, 2f);
+            handleRect.offsetMax = new Vector2(-2f, -2f);
+            var handleImage =
+                handleObject.GetComponent<Image>();
+            handleImage.color =
+                new Color(0.08f, 0.48f, 0.60f, 0.95f);
+
+            _verticalScrollbar = root.GetComponent<Scrollbar>();
+            _verticalScrollbar.direction =
+                Scrollbar.Direction.BottomToTop;
+            _verticalScrollbar.targetGraphic = handleImage;
+            _verticalScrollbar.handleRect = handleRect;
+            _scrollRect.verticalScrollbar = _verticalScrollbar;
+            _scrollRect.verticalScrollbarVisibility =
+                ScrollRect.ScrollbarVisibility.Permanent;
         }
 
         private void BuildEntryHeader()
@@ -1396,22 +1633,22 @@ namespace Trpg.Pawns
                 _entryHeaderRect,
                 "스탯",
                 0f,
-                0.34f,
+                0.36f,
                 TextAnchor.MiddleLeft,
                 true);
             CreateEntryColumnText(
                 "Regular",
                 _entryHeaderRect,
                 "보통",
-                0.34f,
-                0.56f,
+                0.36f,
+                0.57f,
                 TextAnchor.MiddleCenter,
                 true);
             CreateEntryColumnText(
                 "Hard",
                 _entryHeaderRect,
                 "어려움",
-                0.56f,
+                0.57f,
                 0.78f,
                 TextAnchor.MiddleCenter,
                 true);
@@ -1590,22 +1827,22 @@ namespace Trpg.Pawns
                 root.transform,
                 string.Empty,
                 0f,
-                0.34f,
+                0.36f,
                 TextAnchor.MiddleLeft,
                 false);
             var regularText = CreateEntryColumnText(
                 "Regular",
                 root.transform,
                 string.Empty,
-                0.34f,
-                0.56f,
+                0.36f,
+                0.57f,
                 TextAnchor.MiddleCenter,
                 false);
             var hardText = CreateEntryColumnText(
                 "Hard",
                 root.transform,
                 string.Empty,
-                0.56f,
+                0.57f,
                 0.78f,
                 TextAnchor.MiddleCenter,
                 false);
@@ -1618,6 +1855,10 @@ namespace Trpg.Pawns
                 TextAnchor.MiddleCenter,
                 false);
             var regularInput = CreateInlineStatInput(root.transform);
+            var rollSource = root.AddComponent<PawnRollSourceWidget>();
+            PawnRollSourceWidget.ForwardInputDragEvents(
+                regularInput.gameObject,
+                rollSource);
 
             return new EntryVisual
             {
@@ -1627,7 +1868,8 @@ namespace Trpg.Pawns
                 RegularText = regularText,
                 HardText = hardText,
                 ExtremeText = extremeText,
-                RegularInput = regularInput
+                RegularInput = regularInput,
+                RollSource = rollSource
             };
         }
 
@@ -1641,8 +1883,8 @@ namespace Trpg.Pawns
                 typeof(InputField));
             root.transform.SetParent(parent, false);
             var rect = root.GetComponent<RectTransform>();
-            rect.anchorMin = new Vector2(0.34f, 0f);
-            rect.anchorMax = new Vector2(0.56f, 1f);
+            rect.anchorMin = new Vector2(0.36f, 0f);
+            rect.anchorMax = new Vector2(0.57f, 1f);
             rect.offsetMin = new Vector2(3f, 4f);
             rect.offsetMax = new Vector2(-3f, -4f);
 
@@ -1693,7 +1935,7 @@ namespace Trpg.Pawns
             text.resizeTextMinSize = isHeader ? 10 : 12;
             text.resizeTextMaxSize = isHeader ? 12 : 15;
             text.horizontalOverflow = HorizontalWrapMode.Wrap;
-            text.verticalOverflow = VerticalWrapMode.Truncate;
+            text.verticalOverflow = VerticalWrapMode.Overflow;
             var rect = text.rectTransform;
             rect.anchorMin = new Vector2(anchorMinX, 0f);
             rect.anchorMax = new Vector2(anchorMaxX, 1f);
@@ -1738,6 +1980,28 @@ namespace Trpg.Pawns
             {
                 visual.Button.onClick.AddListener(
                     () => BeginInlineEdit(visual));
+            }
+
+            var canRoll =
+                data.ShowsDifficulty &&
+                data.Regular >= PawnCheckRollRules.MinimumTarget &&
+                data.Hard >= PawnCheckRollRules.MinimumTarget &&
+                data.Extreme >= PawnCheckRollRules.MinimumTarget;
+            if (canRoll)
+            {
+                var source = new PawnCheckSourceData(
+                    data.StatId,
+                    data.DisplayName,
+                    PawnRollSourceKind.Stat,
+                    data.Regular,
+                    data.Hard,
+                    data.Extreme);
+                visual.RollSource.Bind(source);
+                visual.RollSource.SetInteractionEnabled(_isEmbedded);
+            }
+            else
+            {
+                visual.RollSource.Unbind();
             }
         }
 
@@ -1805,13 +2069,9 @@ namespace Trpg.Pawns
             desiredFinalValue = Math.Max(
                 data.MinimumValue,
                 Math.Min(data.MaximumValue, desiredFinalValue));
-            var manualModifier =
-                desiredFinalValue -
-                data.BaseValue -
-                data.OtherModifier;
             ValueEditRequested?.Invoke(
                 data.StatId,
-                manualModifier);
+                desiredFinalValue);
         }
 
         private void CancelInlineEdit()
@@ -1866,15 +2126,67 @@ namespace Trpg.Pawns
             return text;
         }
 
+        private void ApplyEmbeddedVisibility()
+        {
+            if (!_isEmbedded ||
+                _drawerRect == null ||
+                _drawerCanvasGroup == null)
+            {
+                return;
+            }
+
+            if (_summaryRect != null)
+                _summaryRect.gameObject.SetActive(false);
+            if (_titleText != null)
+                _titleText.gameObject.SetActive(false);
+            if (_closeButton != null)
+                _closeButton.gameObject.SetActive(false);
+            if (_quickCheckButton != null)
+                _quickCheckButton.gameObject.SetActive(false);
+            if (_skillToggleButton != null)
+                _skillToggleButton.gameObject.SetActive(false);
+
+            _drawerRect.gameObject.SetActive(_isBound);
+            _drawerCanvasGroup.alpha = _isBound ? 1f : 0f;
+            _drawerCanvasGroup.interactable = _isBound;
+            _drawerCanvasGroup.blocksRaycasts = _isBound;
+            if (_isBound)
+            {
+                _drawerRect.anchoredPosition = Vector2.zero;
+                _drawerRect.localScale = Vector3.one;
+                _skillPanel?.SetExpanded(true, false);
+            }
+        }
+
+        private static void StretchToHost(RectTransform rect)
+        {
+            rect.anchorMin = Vector2.zero;
+            rect.anchorMax = Vector2.one;
+            rect.pivot = new Vector2(0.5f, 0.5f);
+            rect.offsetMin = Vector2.zero;
+            rect.offsetMax = Vector2.zero;
+            rect.localScale = Vector3.one;
+        }
+
         private void ApplyExpandedState(bool animate)
         {
+            if (_isEmbedded)
+            {
+                ApplyEmbeddedVisibility();
+                return;
+            }
+
             if (_summaryRect != null)
-                _summaryRect.gameObject.SetActive(_isBound);
+            {
+                _summaryRect.gameObject.SetActive(
+                    _isBound && _legacyLauncherVisible);
+            }
 
             if (_drawerRect == null || _drawerCanvasGroup == null)
                 return;
 
-            var showDrawer = _isBound && _isExpanded;
+            var showDrawer =
+                _isBound && _legacyLauncherVisible && _isExpanded;
             if (showDrawer)
             {
                 ShowDrawer(animate);
@@ -2137,24 +2449,52 @@ namespace Trpg.Pawns
                 return;
             }
 
-            var availableWidth = Mathf.Max(320f, _rootRect.rect.width);
-            var availableHeight = Mathf.Max(420f, _rootRect.rect.height);
-            var drawerWidth = Mathf.Min(
-                DrawerWidth,
-                Mathf.Max(380f, availableWidth * 0.42f));
-            var drawerHeight = Mathf.Min(
-                DrawerHeight,
-                Mathf.Max(420f, availableHeight - DrawerTopOffset - 18f));
-            _drawerRect.sizeDelta =
-                new Vector2(drawerWidth, drawerHeight);
-            var skillPanelWidth = Mathf.Min(
-                372f,
-                Mathf.Max(
-                    280f,
-                    availableWidth - drawerWidth - 60f));
-            _skillPanel?.SetLayout(
-                skillPanelWidth,
-                drawerHeight);
+            float availableWidth;
+            float availableHeight;
+            float drawerWidth;
+            float drawerHeight;
+            if (_isEmbedded && _embeddedStatsHost != null)
+            {
+                availableWidth = Mathf.Max(
+                    320f,
+                    _embeddedStatsHost.rect.width);
+                availableHeight = Mathf.Max(
+                    420f,
+                    _embeddedStatsHost.rect.height);
+                drawerWidth = availableWidth;
+                drawerHeight = availableHeight;
+                StretchToHost(_drawerRect);
+                _skillPanel?.SetLayout(
+                    _embeddedSkillsHost != null
+                        ? _embeddedSkillsHost.rect.width
+                        : availableWidth,
+                    _embeddedSkillsHost != null
+                        ? _embeddedSkillsHost.rect.height
+                        : availableHeight);
+            }
+            else
+            {
+                availableWidth = Mathf.Max(320f, _rootRect.rect.width);
+                availableHeight = Mathf.Max(420f, _rootRect.rect.height);
+                drawerWidth = Mathf.Min(
+                    DrawerWidth,
+                    Mathf.Max(380f, availableWidth * 0.42f));
+                drawerHeight = Mathf.Min(
+                    DrawerHeight,
+                    Mathf.Max(
+                        420f,
+                        availableHeight - DrawerTopOffset - 18f));
+                _drawerRect.sizeDelta =
+                    new Vector2(drawerWidth, drawerHeight);
+                var skillPanelWidth = Mathf.Min(
+                    372f,
+                    Mathf.Max(
+                        280f,
+                        availableWidth - drawerWidth - 60f));
+                _skillPanel?.SetLayout(
+                    skillPanelWidth,
+                    drawerHeight);
+            }
 
             var listWidth = drawerWidth - 28f;
             _grid.constraintCount = 1;
@@ -2273,10 +2613,21 @@ namespace Trpg.Pawns
                 new Vector2(14f, ViewportBottom);
             _entryViewportRect.offsetMax =
                 new Vector2(
-                    -14f,
+                    -30f,
                     -(entryHeaderTop +
                       EntryHeaderHeight +
                       ViewportGap));
+            if (_verticalScrollbarRect != null)
+            {
+                _verticalScrollbarRect.offsetMin =
+                    new Vector2(-18f, ViewportBottom);
+                _verticalScrollbarRect.offsetMax =
+                    new Vector2(
+                        -6f,
+                        -(entryHeaderTop +
+                          EntryHeaderHeight +
+                          ViewportGap));
+            }
             PositionAxisLabels();
         }
 
@@ -2291,20 +2642,67 @@ namespace Trpg.Pawns
             if (_chartRect == null || _axisLabels.Count < AxisCount)
                 return;
 
-            var labelRadius = Mathf.Clamp(
-                (_chartRect.rect.height - RadarVerticalPadding) * 0.5f,
+            var chartHeight = Mathf.Max(
+                DetailFocusChartHeight,
+                _currentChartHeight);
+            var scale = Mathf.InverseLerp(
+                DetailFocusChartHeight,
+                GraphFocusChartHeight,
+                chartHeight);
+            var radarSize = _radarRect != null
+                ? _radarRect.sizeDelta.x
+                : Mathf.Clamp(
+                    chartHeight - RadarVerticalPadding,
+                    RadarMinSize,
+                    RadarMaxSize);
+            var fontSize = Mathf.RoundToInt(
+                Mathf.Lerp(9f, 14f, scale));
+            var labelWidth = Mathf.Lerp(58f, 108f, scale);
+            var labelHeight = Mathf.Lerp(30f, 52f, scale);
+            var desiredRadius =
+                radarSize * 0.5f + Mathf.Lerp(10f, 16f, scale);
+            var maximumHorizontalRadius = Mathf.Min(
+                AxisLabelMaxRadius,
+                Mathf.Max(
+                    AxisLabelMinRadius,
+                    (_chartRect.rect.width - labelWidth) * 0.5f - 2f));
+            var maximumVerticalRadius = Mathf.Min(
+                AxisLabelMaxRadius,
+                Mathf.Max(
+                    AxisLabelMinRadius,
+                    (chartHeight - labelHeight) * 0.5f - 2f));
+            var compactHorizontalRadius = Mathf.Min(
+                maximumHorizontalRadius,
+                _chartRect.rect.width * 0.30f);
+            var horizontalRadius = Mathf.Clamp(
+                Mathf.Lerp(
+                    compactHorizontalRadius,
+                    desiredRadius,
+                    scale),
                 AxisLabelMinRadius,
-                AxisLabelMaxRadius);
+                maximumHorizontalRadius);
+            var verticalRadius = Mathf.Clamp(
+                desiredRadius,
+                AxisLabelMinRadius,
+                maximumVerticalRadius);
+
             for (var index = 0; index < AxisCount; index++)
             {
+                var label = _axisLabels[index];
+                label.fontSize = fontSize;
+                label.resizeTextMinSize = Mathf.Max(8, fontSize - 2);
+                label.resizeTextMaxSize = fontSize;
+                label.rectTransform.sizeDelta = new Vector2(
+                    labelWidth,
+                    labelHeight);
+
                 var angle =
                     (90f - index * 360f / AxisCount) *
                     Mathf.Deg2Rad;
-                _axisLabels[index].rectTransform.anchoredPosition =
+                label.rectTransform.anchoredPosition =
                     new Vector2(
-                        Mathf.Cos(angle),
-                        Mathf.Sin(angle)) *
-                    labelRadius;
+                        Mathf.Cos(angle) * horizontalRadius,
+                        Mathf.Sin(angle) * verticalRadius);
             }
         }
 

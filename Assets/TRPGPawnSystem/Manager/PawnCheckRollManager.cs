@@ -77,6 +77,12 @@ namespace Trpg.Pawns
                 _overlay?.Hide();
                 if (_overlayDragHandle != null)
                     _overlayDragHandle.enabled = false;
+                if (_isOpen)
+                {
+                    ConfigureExistingStatPanelInteraction();
+                    BindSourceRows();
+                    StartDeferredRowBinding();
+                }
             }
         }
 
@@ -263,6 +269,9 @@ namespace Trpg.Pawns
             if (_boardStackManager != null)
             {
                 _overlay?.Hide();
+                ConfigureExistingStatPanelInteraction();
+                BindSourceRows();
+                StartDeferredRowBinding();
                 if (_sessionState.HasSource)
                 {
                     _source = _sessionState.Source;
@@ -1388,7 +1397,7 @@ namespace Trpg.Pawns
                 var drawer = ReadPrivateField<RectTransform>(
                     panel,
                     "_drawerRect");
-                if (drawer != null)
+                if (drawer != null && _boardStackManager == null)
                 {
                     var bounds = _rootCanvas.transform as RectTransform;
                     var availableHeight = bounds != null

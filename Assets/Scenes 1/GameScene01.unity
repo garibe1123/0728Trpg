@@ -1274,6 +1274,7 @@ MonoBehaviour:
   _inventoryCapacityMultiplier: 1
   _inventoryFallbackCapacity: 0
   _handoutCatalog: {fileID: 0}
+  _enableBoardDashboard: 1
   _walkButton: {fileID: 185402859}
   _checkStatId: default
   _effectDiceCount: 2
@@ -1309,7 +1310,6 @@ GameObject:
   m_Component:
   - component: {fileID: 1679236806}
   - component: {fileID: 1679236805}
-  - component: {fileID: 1679236807}
   m_Layer: 0
   m_Name: PawnManager
   m_TagString: Untagged
@@ -1351,7 +1351,8 @@ MonoBehaviour:
   _createTurnButtonAtRuntime: 1
   _turnUiReferenceResolution: {x: 1920, y: 1080}
   _turnButtonOffset: {x: 24, y: -24}
-  _turnButtonSize: {x: 180, y: 64}
+  _legacyTurnButtonSize: {x: 180, y: 64}
+  _turnButtonDiameter: 112
   _turnButtonColor: {r: 0.075, g: 0.16, b: 0.22, a: 0.96}
 --- !u!4 &1679236806
 Transform:
@@ -1369,20 +1370,6 @@ Transform:
   - {fileID: 363143310}
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &1679236807
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1679236804}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 01eef3f11cc09a64db15b65a187b5231, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  _pawnUiManager: {fileID: 1370380631}
-  _checkRollManager: {fileID: 0}
 --- !u!1 &1751932508
 GameObject:
   m_ObjectHideFlags: 0
@@ -1550,6 +1537,61 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1834543159}
   m_CullTransparentMesh: 1
+--- !u!1 &1996755620
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1996755622}
+  - component: {fileID: 1996755621}
+  m_Layer: 0
+  m_Name: CameraManager
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &1996755621
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1996755620}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 96e6865ed2936524fb00c6460a5657aa, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  _boardCamera: {fileID: 519420031}
+  _pawnManager: {fileID: 1679236805}
+  _minimumZoomMultiplier: 0.5
+  _maximumZoomMultiplier: 2
+  _zoomStepPerNotch: 0.1
+  _zoomTowardPointerWhenUnlocked: 1
+  _boardPlaneZ: 0
+  _allowLeftDrag: 1
+  _allowMiddleDrag: 1
+  _dragThresholdPixels: 5
+  _blockInputOverUi: 1
+--- !u!4 &1996755622
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1996755620}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 656.3422, y: 595.86304, z: 3.9806597}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0
@@ -1564,3 +1606,4 @@ SceneRoots:
   - {fileID: 662862295}
   - {fileID: 470943562}
   - {fileID: 1751932509}
+  - {fileID: 1996755622}
