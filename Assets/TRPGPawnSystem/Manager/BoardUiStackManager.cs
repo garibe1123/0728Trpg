@@ -65,6 +65,7 @@ namespace Trpg.Pawns
 
         private void OnDisable()
         {
+            _pawnUiManager?.FlushPendingEdits();
             _stateMachine.Changed -= HandleStateChanged;
             PawnRollSourceWidget.DragStarted -= HandleDragStarted;
             PawnRollSourceWidget.DragEnded -= HandleDragEnded;
@@ -91,6 +92,7 @@ namespace Trpg.Pawns
             if (!_connected || tab == SheetTab.None)
                 return;
 
+            _pawnUiManager?.FlushPendingEdits();
             if (_pawnManager != null &&
                 _pawnManager.IsMovementModeActive)
             {
@@ -137,6 +139,28 @@ namespace Trpg.Pawns
                 _pawnUiManager.EffectDiceSides,
                 _pawnUiManager.EffectDiceModifier);
             _stateMachine.ClickCheckRoll();
+        }
+
+        /// <summary>
+        /// 네트워크에서 수신한 굴림을 기존 Stats/RollRoulette 탭에
+        /// 읽기 전용으로 표시할 준비를 합니다.
+        /// </summary>
+        public bool PresentRemoteRollPanel()
+        {
+            if (!_connected || _widget == null)
+                return false;
+
+            if (_pawnManager != null &&
+                _pawnManager.IsMovementModeActive)
+            {
+                _pawnManager.SetMovementMode(false);
+            }
+
+            _effectRollActive = false;
+            EnsureSheetOpen(SheetTab.Stats);
+            _widget.ShowEmptyRollPanel();
+            _stateMachine.ClickCheckRoll();
+            return true;
         }
 
         private void BeginConnect()
@@ -728,6 +752,7 @@ namespace Trpg.Pawns
             if (!_embeddedWidgetsReady)
                 return;
 
+            _pawnUiManager?.FlushPendingEdits();
             _pawnUiManager?.HideInventoryFromBoardStack();
             _pawnUiManager?.HideProfileFromBoardStack();
             if (_statPanel != null)
@@ -792,6 +817,7 @@ namespace Trpg.Pawns
                 return;
             }
 
+            _pawnUiManager?.FlushPendingEdits();
             var before = _stateMachine.State;
             var after = _stateMachine.Escape();
             if (before == after)

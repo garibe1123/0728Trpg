@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using TMPro;
 using Trpg.Domain.Stats;
+using Trpg.Pawns;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -225,6 +226,11 @@ namespace Trpg.UI.Stats
         {
             var viewData = new StatSheetViewData();
             var presentation = new StatPresentationService(runtime);
+            var authority = TRPGSessionAuthority.Instance;
+            var effectiveGmMode =
+                authority != null && authority.IsOnline
+                    ? authority.IsLocalGameMaster
+                    : _isGmMode;
             var baseGroups = new Dictionary<string, StatGroupViewData>(StringComparer.Ordinal);
             var runtimeGroups = new Dictionary<string, StatGroupViewData>(StringComparer.Ordinal);
             var baseOrder = new List<string>();
@@ -249,15 +255,22 @@ namespace Trpg.UI.Stats
                     order.Add(category);
                 }
 
+                var canPlayerEdit =
+                    isRuntime &&
+                    IsPlayerEditableCurrentStat(runtime, definition);
+                var canEdit =
+                    effectiveGmMode
+                        ? definition.Source == StatValueSource.Base ||
+                          isRuntime
+                        : canPlayerEdit;
+
                 group.Entries.Add(new StatEntryViewData(
                     definition.Id,
                     definition.DisplayName,
                     presentation.FormatValue(definition.Id),
                     presentation.BuildTooltip(definition.Id),
-                    _isGmMode && isRuntime && definition.IsAdjustable,
-                    _isGmMode &&
-                    (definition.Source == StatValueSource.Base ||
-                     (isRuntime && definition.IsAdjustable)),
+                    canEdit && isRuntime,
+                    canEdit,
                     definition.AdjustStep,
                     runtime.GetNumber(definition.Id)));
             }
@@ -346,16 +359,101 @@ namespace Trpg.UI.Stats
             _usedGroupTitleCount = 0;
         }
 
-        private void OnAdjustmentRequested(string statId, double delta)
+        private void OnAdjustmentRequested(
+            string statId,
+            double delta)
         {
-            if (_isGmMode && _boundState != null)
-                _boundState.TryAdjust(statId, delta);
+            if (_boundState?.Runtime == null)
+                return;
+
+            double current;
+            try
+            {
+                current = _boundState.Runtime.GetNumber(statId);
+            }
+            catch (Exception)
+            {
+                return;
+            }
+
+            SubmitStatValue(statId, current + delta);
         }
 
-        private void OnValueEditRequested(string statId, double value)
+        private void OnValueEditRequested(
+            string statId,
+            double value)
         {
-            if (_isGmMode && _boundState != null)
-                _boundState.TrySetDisplayedValue(statId, value);
+            SubmitStatValue(statId, value);
+        }
+
+        private void SubmitStatValue(
+            string statId,
+            double value)
+        {
+            if (_boundState == null ||
+                string.IsNullOrWhiteSpace(statId))
+            {
+                return;
+            }
+
+            var pawn = _boundState.GetComponent<InteractivePawn>();
+            if (pawn == null)
+            {
+                pawn = _boundState.GetComponentInParent<
+                    InteractivePawn>(true);
+            }
+            if (pawn == null)
+            {
+                pawn = _boundState.GetComponentInChildren<
+                    InteractivePawn>(true);
+            }
+
+            var authority = TRPGSessionAuthority.Instance;
+            if (authority != null &&
+                authority.ShouldRouteClientStatChange)
+            {
+                authority.RequestStatChange(
+                    pawn,
+                    statId,
+                    value);
+                return;
+            }
+
+            _boundState.TrySetAuthoritativeDisplayedValue(
+                statId,
+                value);
+        }
+
+        private static bool IsPlayerEditableCurrentStat(
+            StatRuntimeState runtime,
+            IStatDefinition definition)
+        {
+            if (runtime == null ||
+                definition == null ||
+                definition.Source != StatValueSource.Runtime)
+            {
+                return false;
+            }
+
+            var id = definition.Id;
+            var template = runtime.Template;
+            return definition.IsAdjustable ||
+                   string.Equals(
+                       id,
+                       template.GetStatId(StatRole.HealthCurrent),
+                       StringComparison.Ordinal) ||
+                   string.Equals(
+                       id,
+                       template.GetStatId(StatRole.MagicCurrent),
+                       StringComparison.Ordinal) ||
+                   string.Equals(
+                       id,
+                       template.GetStatId(StatRole.SanityCurrent),
+                       StringComparison.Ordinal) ||
+                   string.Equals(
+                       id,
+                       template.GetStatId(StatRole.LuckCurrent),
+                       StringComparison.Ordinal);
         }
 
         private void OnActiveStateChanged(PlayerStatState state)

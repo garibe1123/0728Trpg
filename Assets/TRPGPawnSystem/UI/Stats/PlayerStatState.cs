@@ -105,6 +105,16 @@ namespace Trpg.UI.Stats
                    _runtime.TrySetDisplayedValue(statId, value);
         }
 
+        public bool TrySetAuthoritativeDisplayedValue(
+            string statId,
+            double value)
+        {
+            return _runtime != null &&
+                   _runtime.TrySetAuthoritativeDisplayedValue(
+                       statId,
+                       value);
+        }
+
         public void Activate()
         {
             if (!IsInitialized)

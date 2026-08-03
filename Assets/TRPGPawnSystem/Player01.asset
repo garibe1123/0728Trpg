@@ -17,7 +17,7 @@ MonoBehaviour:
   _moveableKind: 0
   _displayName: Player01
   _description: Player01
-  _portrait: {fileID: 21300000, guid: 444810ca896903c41adf617b35274dc4, type: 3}
+  _portrait: {fileID: 21300000, guid: c6f1ba1a45e8a9447aeebe98952cb344, type: 3}
   _legacyMoveMeters: 0
   _legacyMoveMetersPerTurn: 0
   _movementScore: 40

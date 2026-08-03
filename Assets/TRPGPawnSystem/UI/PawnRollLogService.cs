@@ -123,6 +123,31 @@ namespace Trpg.Pawns
             return entry;
         }
 
+        public static PawnRollLogEntry RecordRemote(
+            PawnRollLogKind kind,
+            InteractivePawn pawn,
+            string pawnName,
+            string title,
+            string expression,
+            int value,
+            string result,
+            string detail)
+        {
+            var entry = new PawnRollLogEntry(
+                ++_nextSequence,
+                DateTime.UtcNow,
+                kind,
+                pawn,
+                pawnName,
+                title,
+                expression,
+                value,
+                result,
+                detail);
+            Add(entry);
+            return entry;
+        }
+
         public static PawnRollLogEntry RecordChat(
             InteractivePawn pawn,
             string speakerName,
@@ -181,8 +206,15 @@ namespace Trpg.Pawns
                 EntriesInternal.RemoveAt(0);
 
             EntriesInternal.Add(entry);
-            Debug.Log($"[ROLL/CHAT LOG] {entry.ToDisplayString()}", entry.Pawn);
+            Debug.Log(
+                $"[ROLL/CHAT LOG] {entry.ToDisplayString()}",
+                entry.Pawn);
             EntryAdded?.Invoke(entry);
+
+            // 이벤트 구독 순서와 무관하게 단일 SessionAuthority로 직접 전달합니다.
+            // Authority 내부에서 Sequence 중복을 제거하므로 기존 이벤트 경로와
+            // 동시에 호출되어도 네트워크 로그는 한 번만 전송됩니다.
+            TRPGSessionAuthority.PublishLogEntryFromService(entry);
         }
 
         private static string NormalizeChat(string message)

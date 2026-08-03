@@ -266,7 +266,6 @@ namespace Trpg.Pawns.Tests
 {
     using System.Collections.Generic;
     using NUnit.Framework;
-
     internal sealed class BoardUiStateMachineTests
     {
         [Test]

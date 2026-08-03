@@ -112,6 +112,9 @@ namespace Trpg.Pawns
         private Sprite _boundPortrait;
         private bool _isRollInProgress;
         private BoardUiStackManager _boardStackManager;
+        private TRPGNetworkGameManager _networkGameManager;
+        private bool _deferredStatRefresh;
+        private bool _deferredProfileRefresh;
 
         public PawnInfoBarWidget InfoBar => _infoBar;
         public PawnManager PawnManager => _pawnManager;
@@ -125,6 +128,18 @@ namespace Trpg.Pawns
         public int EffectDiceCount => _effectDiceCount;
         public int EffectDiceSides => _effectDiceSides;
         public int EffectDiceModifier => _effectDiceModifier;
+
+        public void ConfigureNetworkManager(
+            TRPGNetworkGameManager networkGameManager)
+        {
+            _networkGameManager = networkGameManager;
+        }
+
+        public void FlushPendingEdits()
+        {
+            _infoBar?.FlushPendingStatEdits();
+            _profileWidget?.FlushPendingEdit();
+        }
 
         public void RegisterBoardStack(BoardUiStackManager manager)
         {
@@ -187,6 +202,7 @@ namespace Trpg.Pawns
         {
             if (_profileWidget == null)
                 return;
+            _profileWidget.FlushPendingEdit();
             _profileWidget.Hide();
             _profileWidget.SetEmbeddedMode(null, false);
         }
@@ -286,8 +302,32 @@ namespace Trpg.Pawns
                 _pawnManager.SelectedInteractive);
         }
 
+        private void LateUpdate()
+        {
+            if (_deferredStatRefresh &&
+                (_infoBar == null || !_infoBar.HasActiveStatEdit))
+            {
+                _deferredStatRefresh = false;
+                RefreshStatUi();
+                RefreshInventoryUi();
+            }
+
+            if (_deferredProfileRefresh &&
+                (_profileWidget == null ||
+                 !_profileWidget.HasActiveEdit))
+            {
+                _deferredProfileRefresh = false;
+                if (_profileWidget != null &&
+                    _profileWidget.IsVisible)
+                {
+                    _profileWidget.RefreshFromState();
+                }
+            }
+        }
+
         private void OnDisable()
         {
+            FlushPendingEdits();
             if (_pawnManager != null)
             {
                 _pawnManager.InteractiveSelectionChanged -=
@@ -356,6 +396,12 @@ namespace Trpg.Pawns
 
             if (_profileWidget != null)
             {
+                _profileWidget.CloseRequested -=
+                    HandleProfileCloseRequested;
+                _profileWidget.Applied -=
+                    HandleProfileApplied;
+                _profileWidget.ValueEditRequested -=
+                    HandleProfileValueEditRequested;
                 Destroy(_profileWidget.gameObject);
                 _profileWidget = null;
             }
@@ -376,6 +422,7 @@ namespace Trpg.Pawns
 
         private void HandleCloseRequested()
         {
+            FlushPendingEdits();
             _inventoryWidget?.Hide();
             _profileWidget?.Hide();
             _pawnManager.ClearSelection();
@@ -384,6 +431,9 @@ namespace Trpg.Pawns
         private void HandleInteractiveSelectionChanged(
             InteractivePawn pawn)
         {
+            FlushPendingEdits();
+            _deferredStatRefresh = false;
+            _deferredProfileRefresh = false;
             UnbindStatState();
             UnbindSkillState();
             UnbindInventoryState();
@@ -626,11 +676,20 @@ namespace Trpg.Pawns
 
         private void HandleBoundProfileStateChanged()
         {
-            if (_profileWidget != null &&
-                _profileWidget.IsVisible)
+            if (_profileWidget == null ||
+                !_profileWidget.IsVisible)
             {
-                _profileWidget.RefreshFromState();
+                return;
             }
+
+            if (_profileWidget.HasActiveEdit)
+            {
+                _deferredProfileRefresh = true;
+                return;
+            }
+
+            _deferredProfileRefresh = false;
+            _profileWidget.RefreshFromState();
         }
 
         private void HandleBoundInventoryStateChanged()
@@ -640,6 +699,13 @@ namespace Trpg.Pawns
 
         private void HandleBoundStatStateChanged()
         {
+            if (_infoBar != null && _infoBar.HasActiveStatEdit)
+            {
+                _deferredStatRefresh = true;
+                return;
+            }
+
+            _deferredStatRefresh = false;
             RefreshStatUi();
             RefreshInventoryUi();
         }
@@ -659,13 +725,107 @@ namespace Trpg.Pawns
                 return;
             }
 
-            if (!_boundStatState.TrySetDisplayedValue(statId, value))
+            var pawn = _pawnManager != null
+                ? _pawnManager.SelectedInteractive
+                : null;
+
+            var authority = TRPGSessionAuthority.Instance;
+            var shouldRouteClientStat =
+                (_networkGameManager != null &&
+                 _networkGameManager.ShouldRouteClientStatChange) ||
+                (authority != null &&
+                 authority.ShouldRouteClientStatChange);
+
+            if (shouldRouteClientStat)
+            {
+                var requested =
+                    _networkGameManager != null &&
+                    _networkGameManager.RequestStatChange(
+                        pawn,
+                        statId,
+                        value);
+
+                if (!requested && authority != null)
+                {
+                    requested = authority.RequestStatChange(
+                        pawn,
+                        statId,
+                        value);
+                }
+
+                if (!requested)
+                    RefreshStatUi();
+
+                return;
+            }
+
+            var previous = TryGetDisplayedStatValue(
+                _boundStatState,
+                statId,
+                out var previousValue)
+                    ? previousValue
+                    : value;
+
+            if (!_boundStatState.TrySetAuthoritativeDisplayedValue(
+                    statId,
+                    value))
             {
                 Debug.LogWarning(
                     $"[{name}] 표시 스탯 값을 변경하지 못했습니다. " +
                     $"StatId={statId}, Value={value}",
                     _boundStatState);
                 RefreshStatUi();
+                return;
+            }
+
+            var current = TryGetDisplayedStatValue(
+                _boundStatState,
+                statId,
+                out var currentValue)
+                    ? currentValue
+                    : value;
+
+            var sessionAuthority =
+                TRPGSessionAuthority.Instance;
+
+            if (sessionAuthority != null)
+            {
+                sessionAuthority.PublishHostStatChange(
+                    pawn,
+                    statId,
+                    previous,
+                    current);
+            }
+            else
+            {
+                _networkGameManager?.PublishHostStatChange(
+                    pawn,
+                    statId,
+                    previous,
+                    current);
+            }
+        }
+
+        private static bool TryGetDisplayedStatValue(
+            PlayerStatState statState,
+            string statId,
+            out double value)
+        {
+            value = 0d;
+            if (statState?.Runtime == null ||
+                string.IsNullOrWhiteSpace(statId))
+            {
+                return false;
+            }
+
+            try
+            {
+                value = statState.Runtime.GetNumber(statId);
+                return true;
+            }
+            catch (Exception)
+            {
+                return false;
             }
         }
 
@@ -1006,16 +1166,64 @@ namespace Trpg.Pawns
                 HandleProfileCloseRequested;
             _profileWidget.Applied +=
                 HandleProfileApplied;
+            _profileWidget.ValueEditRequested +=
+                HandleProfileValueEditRequested;
         }
 
         private void HandleProfileCloseRequested()
         {
+            _profileWidget?.FlushPendingEdit();
             _profileWidget?.Hide();
         }
 
         private void HandleProfileApplied()
         {
-            // PawnProfileState가 직접 변경 이벤트를 발행합니다.
+            _profileWidget?.FlushPendingEdit();
+        }
+
+        private void HandleProfileValueEditRequested(
+            PawnProfileSection section,
+            string value)
+        {
+            if (_boundProfileState == null)
+                return;
+
+            var pawn = _pawnManager != null
+                ? _pawnManager.SelectedInteractive
+                : null;
+            if (pawn == null || pawn.Definition == null)
+                return;
+
+            var authority = TRPGSessionAuthority.Instance;
+            var routeToHost = authority != null &&
+                              authority.ShouldRouteClientProfileChange;
+            if (routeToHost)
+            {
+                if (!authority.RequestProfileFieldChange(
+                        pawn,
+                        section,
+                        value))
+                {
+                    _profileWidget?.RefreshFromState();
+                }
+                return;
+            }
+
+            if (!_boundProfileState.TrySetField(section, value))
+            {
+                _profileWidget?.RefreshFromState();
+                return;
+            }
+
+            if (authority != null &&
+                authority.IsLocalGameMaster &&
+                authority.IsGameplayReady)
+            {
+                authority.PublishHostProfileFieldChange(
+                    pawn,
+                    section,
+                    value);
+            }
         }
 
         private void HandleInventoryRequested()
@@ -1080,19 +1288,45 @@ namespace Trpg.Pawns
             if (_boundInventoryState == null)
                 return;
 
+            var pawn = _pawnManager != null
+                ? _pawnManager.SelectedInteractive
+                : null;
+            var authority = TRPGSessionAuthority.Instance;
+
+            if (ShouldRouteClientInventory(authority))
+            {
+                var requested =
+                    _networkGameManager != null &&
+                    _networkGameManager.RequestInventoryAdd(
+                        pawn,
+                        draft);
+
+                if (!requested && authority != null)
+                {
+                    requested = authority.RequestInventoryAdd(
+                        pawn,
+                        draft);
+                }
+
+                if (!requested)
+                    RefreshInventoryUi();
+                return;
+            }
+
             string error;
+            string runtimeId;
             var succeeded = draft.Definition != null
                 ? _boundInventoryState.TryAdd(
                     draft.Definition,
                     draft.Quantity,
-                    out _,
+                    out runtimeId,
                     out error)
                 : _boundInventoryState.TryAddCustom(
                     draft.Type,
                     draft.DisplayName,
                     draft.Quantity,
                     draft.UnitWeight,
-                    out _,
+                    out runtimeId,
                     out error);
 
             if (!succeeded)
@@ -1101,42 +1335,235 @@ namespace Trpg.Pawns
                     $"[{name}] 아이템을 추가하지 못했습니다. {error}",
                     _boundInventoryState);
                 RefreshInventoryUi();
+                return;
             }
+
+            var itemName = draft.Definition != null
+                ? draft.Definition.DisplayName
+                : draft.DisplayName;
+            PublishHostInventoryChange(
+                authority,
+                pawn,
+                "아이템 추가",
+                $"{itemName} ×{Mathf.Max(1, draft.Quantity)} 추가");
         }
 
         private void HandleInventoryRemoveRequested(string runtimeId)
         {
-            if (_boundInventoryState == null ||
-                !_boundInventoryState.TryRemove(runtimeId))
+            if (_boundInventoryState == null)
+                return;
+
+            var pawn = _pawnManager != null
+                ? _pawnManager.SelectedInteractive
+                : null;
+            var authority = TRPGSessionAuthority.Instance;
+
+            if (ShouldRouteClientInventory(authority))
+            {
+                var requested =
+                    _networkGameManager != null &&
+                    _networkGameManager.RequestInventoryRemove(
+                        pawn,
+                        runtimeId);
+
+                if (!requested && authority != null)
+                {
+                    requested = authority.RequestInventoryRemove(
+                        pawn,
+                        runtimeId);
+                }
+
+                if (!requested)
+                    RefreshInventoryUi();
+                return;
+            }
+
+            var displayName = ResolveInventoryItemName(runtimeId);
+            if (!_boundInventoryState.TryRemove(runtimeId))
             {
                 RefreshInventoryUi();
+                return;
             }
+
+            PublishHostInventoryChange(
+                authority,
+                pawn,
+                "아이템 제거",
+                $"{displayName} 제거");
         }
 
         private void HandleInventoryQuantityChangedRequested(
             string runtimeId,
             int quantity)
         {
-            if (_boundInventoryState == null ||
-                !_boundInventoryState.TrySetQuantity(
+            if (_boundInventoryState == null)
+                return;
+
+            var pawn = _pawnManager != null
+                ? _pawnManager.SelectedInteractive
+                : null;
+            var authority = TRPGSessionAuthority.Instance;
+
+            if (ShouldRouteClientInventory(authority))
+            {
+                var requested =
+                    _networkGameManager != null &&
+                    _networkGameManager.RequestInventoryQuantity(
+                        pawn,
+                        runtimeId,
+                        quantity);
+
+                if (!requested && authority != null)
+                {
+                    requested = authority.RequestInventoryQuantity(
+                        pawn,
+                        runtimeId,
+                        quantity);
+                }
+
+                if (!requested)
+                    RefreshInventoryUi();
+                return;
+            }
+
+            var displayName = ResolveInventoryItemName(runtimeId);
+            var previousQuantity =
+                ResolveInventoryItemQuantity(runtimeId);
+            if (!_boundInventoryState.TrySetQuantity(
                     runtimeId,
                     quantity))
             {
                 RefreshInventoryUi();
+                return;
             }
+
+            PublishHostInventoryChange(
+                authority,
+                pawn,
+                "아이템 수량",
+                $"{displayName} {previousQuantity} → " +
+                $"{Mathf.Max(1, quantity)}");
         }
 
         private void HandleInventoryMoveRequested(
             string runtimeId,
             int targetIndex)
         {
-            if (_boundInventoryState == null ||
-                !_boundInventoryState.TryMove(
+            if (_boundInventoryState == null)
+                return;
+
+            var pawn = _pawnManager != null
+                ? _pawnManager.SelectedInteractive
+                : null;
+            var authority = TRPGSessionAuthority.Instance;
+
+            if (ShouldRouteClientInventory(authority))
+            {
+                var requested =
+                    _networkGameManager != null &&
+                    _networkGameManager.RequestInventoryMove(
+                        pawn,
+                        runtimeId,
+                        targetIndex);
+
+                if (!requested && authority != null)
+                {
+                    requested = authority.RequestInventoryMove(
+                        pawn,
+                        runtimeId,
+                        targetIndex);
+                }
+
+                if (!requested)
+                    RefreshInventoryUi();
+                return;
+            }
+
+            var displayName = ResolveInventoryItemName(runtimeId);
+            if (!_boundInventoryState.TryMove(
                     runtimeId,
                     targetIndex))
             {
                 RefreshInventoryUi();
+                return;
             }
+
+            PublishHostInventoryChange(
+                authority,
+                pawn,
+                "아이템 정렬",
+                $"{displayName} → 슬롯 {targetIndex + 1}");
+        }
+
+        private bool ShouldRouteClientInventory(
+            TRPGSessionAuthority authority)
+        {
+            return (_networkGameManager != null &&
+                    _networkGameManager
+                        .ShouldRouteClientInventoryChange) ||
+                   (authority != null &&
+                    authority.ShouldRouteClientInventoryChange);
+        }
+
+        private void PublishHostInventoryChange(
+            TRPGSessionAuthority authority,
+            InteractivePawn pawn,
+            string title,
+            string detail)
+        {
+            if (_networkGameManager != null)
+            {
+                _networkGameManager.PublishHostInventorySnapshot(
+                    pawn,
+                    title,
+                    detail);
+                return;
+            }
+
+            authority?.PublishHostInventorySnapshot(
+                pawn,
+                title,
+                detail);
+        }
+
+        private string ResolveInventoryItemName(string runtimeId)
+        {
+            if (_boundInventoryState == null)
+                return "아이템";
+
+            var items = _boundInventoryState.Items;
+            for (var index = 0; index < items.Count; index++)
+            {
+                if (string.Equals(
+                        items[index].RuntimeId,
+                        runtimeId,
+                        StringComparison.Ordinal))
+                {
+                    return items[index].DisplayName;
+                }
+            }
+
+            return "아이템";
+        }
+
+        private int ResolveInventoryItemQuantity(string runtimeId)
+        {
+            if (_boundInventoryState == null)
+                return 0;
+
+            var items = _boundInventoryState.Items;
+            for (var index = 0; index < items.Count; index++)
+            {
+                if (string.Equals(
+                        items[index].RuntimeId,
+                        runtimeId,
+                        StringComparison.Ordinal))
+                {
+                    return items[index].Quantity;
+                }
+            }
+
+            return 0;
         }
 
         private void HandleInventoryCloseRequested()
@@ -1532,13 +1959,46 @@ namespace Trpg.Pawns
         private static bool IsEditable(IStatDefinition definition)
         {
             if (definition == null)
-            {
                 return false;
+
+            var authority = TRPGSessionAuthority.Instance;
+            var isNetworkPlayer =
+                authority != null &&
+                authority.IsOnline &&
+                !authority.IsLocalGameMaster;
+
+            if (!isNetworkPlayer)
+            {
+                return definition.Source == StatValueSource.Base ||
+                       definition.Source == StatValueSource.Runtime;
             }
 
-            return definition.Source == StatValueSource.Base ||
-                   definition.Source == StatValueSource.Runtime &&
-                   definition.IsAdjustable;
+            if (definition.Source != StatValueSource.Runtime)
+                return false;
+
+            return definition.IsAdjustable ||
+                   IsPlayerEditableCurrentStatId(definition.Id);
+        }
+
+        private static bool IsPlayerEditableCurrentStatId(
+            string statId)
+        {
+            return string.Equals(
+                       statId,
+                       "coc.hp.current",
+                       StringComparison.Ordinal) ||
+                   string.Equals(
+                       statId,
+                       "coc.mp.current",
+                       StringComparison.Ordinal) ||
+                   string.Equals(
+                       statId,
+                       "coc.san.current",
+                       StringComparison.Ordinal) ||
+                   string.Equals(
+                       statId,
+                       "coc.luck.current",
+                       StringComparison.Ordinal);
         }
 
         private static PlayerStatState ResolveStatState(
@@ -1654,13 +2114,25 @@ namespace Trpg.Pawns
                 $"굴림 {result.Roll} / 목표 {target}",
                 GetCheckResultColor(result.Grade),
                 1.55f);
+            PawnRollLogService.RecordRoll(
+                PawnRollLogKind.Check,
+                pawn,
+                presentation.Title,
+                presentation.Expression,
+                presentation.FinalValue,
+                presentation.ResultLabel,
+                presentation.DetailLabel);
+            TRPGSessionAuthority.PublishRoll(
+                pawn,
+                PawnRollLogKind.Check,
+                presentation);
             _infoBar.PlayRoll(presentation);
         }
 
         private void HandleEffectRollRequested(
             PawnEffectRollRequest request)
         {
-            if (!TryBeginRoll(out _))
+            if (!TryBeginRoll(out var pawn))
             {
                 return;
             }
@@ -1677,6 +2149,7 @@ namespace Trpg.Pawns
                 request.Modifier,
                 -999,
                 999);
+
             var result = _rollService.RollEffect(
                 _effectDiceCount,
                 _effectDiceSides,
@@ -1691,6 +2164,18 @@ namespace Trpg.Pawns
                 result.GetBreakdownLabel(),
                 _effectColor,
                 1.35f);
+            PawnRollLogService.RecordRoll(
+                PawnRollLogKind.Effect,
+                pawn,
+                presentation.Title,
+                presentation.Expression,
+                presentation.FinalValue,
+                presentation.ResultLabel,
+                presentation.DetailLabel);
+            TRPGSessionAuthority.PublishRoll(
+                pawn,
+                PawnRollLogKind.Effect,
+                presentation);
             _infoBar.PlayRoll(presentation);
         }
 

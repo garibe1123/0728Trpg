@@ -136,6 +136,42 @@ namespace Trpg.Pawns
             return true;
         }
 
+        /// <summary>
+        /// 다른 Peer의 굴림을 기존 Stats/RollRoulette UI에
+        /// 읽기 전용으로 표시합니다.
+        /// </summary>
+        public bool PresentRemoteRoll(
+            InteractivePawn pawn,
+            in PawnRollWindowData data,
+            bool animate)
+        {
+            if (!TryIntegrate())
+            {
+                BeginIntegration();
+                return false;
+            }
+
+            if (pawn != null &&
+                _pawnManager != null &&
+                _pawnManager.SelectedInteractive != pawn)
+            {
+                _pawnManager.SelectInteractive(pawn);
+            }
+
+            _boardStackManager?.PresentRemoteRollPanel();
+
+            if (_resultWindow == null)
+                return false;
+
+            _resultWindow.HideFailureActions();
+            if (animate)
+                _resultWindow.Play(data, null);
+            else
+                _resultWindow.ShowInstant(data);
+
+            return true;
+        }
+
         [RuntimeInitializeOnLoadMethod(
             RuntimeInitializeLoadType.AfterSceneLoad)]
         private static void InstallAfterSceneLoad()
@@ -790,6 +826,10 @@ namespace Trpg.Pawns
                 roll,
                 $"결과 {roll}",
                 "목표값 없음");
+            TRPGSessionAuthority.PublishRoll(
+                ownerPawn,
+                PawnRollLogKind.PureD100,
+                data);
 
             if (_boardStackManager == null)
                 _overlay.Hide();
@@ -893,10 +933,11 @@ namespace Trpg.Pawns
                 isChallenge,
                 data);
             SaveCurrentWindowPositions();
+            var networkLogKind = isChallenge
+                ? PawnRollLogKind.Challenge
+                : PawnRollLogKind.Check;
             PawnRollLogService.RecordRoll(
-                isChallenge
-                    ? PawnRollLogKind.Challenge
-                    : PawnRollLogKind.Check,
+                networkLogKind,
                 ownerPawn,
                 isChallenge ? "대항 판정" : "판정 굴림",
                 $"{_source.DisplayName} {difficultyLabel} " +
@@ -904,6 +945,10 @@ namespace Trpg.Pawns
                 roll,
                 successLabel,
                 $"판정 단계 {gradeLabel}");
+            TRPGSessionAuthority.PublishRoll(
+                ownerPawn,
+                networkLogKind,
+                data);
 
             if (_boardStackManager == null)
                 _overlay.Hide();
@@ -1100,6 +1145,11 @@ namespace Trpg.Pawns
                 _evaluation.Roll,
                 "운 사용으로 성공",
                 $"운 {cost} 사용 / 남은 운 {remaining}");
+            TRPGSessionAuthority.PublishRoll(
+                _currentPawn,
+                PawnRollLogKind.Luck,
+                luckPresentation,
+                animate: false);
             _resultWindow.ShowLuckApplied(luckPresentation);
             ShowSessionStatus(
                 "운을 사용해 판정을 성공으로 확정했습니다.");
@@ -1744,31 +1794,8 @@ namespace Trpg.Pawns
 
         private void HandleLegacyPresentationCompleted()
         {
-            if (_rollWidget == null)
-                return;
-
-            var title = FindRollText("Title");
-            var expression = FindRollText("Expression");
-            var result = FindRollText("Result");
-            var detail = FindRollText("Detail");
-            var counter = FindRollText("Counter");
             StopLegacyRollTimeout();
             SetLegacyRollBlocker(false);
-            if (string.IsNullOrWhiteSpace(title) ||
-                !int.TryParse(counter, out var value))
-            {
-                _legacyRollOwner = null;
-                return;
-            }
-
-            PawnRollLogService.RecordRoll(
-                PawnRollLogKind.Effect,
-                _legacyRollOwner,
-                title,
-                expression,
-                value,
-                result,
-                detail);
             _legacyRollOwner = null;
         }
 

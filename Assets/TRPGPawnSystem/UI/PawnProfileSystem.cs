@@ -132,6 +132,94 @@ namespace Trpg.UI.Profile
             return true;
         }
 
+        public bool TrySetField(
+            PawnProfileSection section,
+            string value)
+        {
+            if (!EnsureInitialized())
+                return false;
+
+            var normalized = Normalize(value);
+            switch (section)
+            {
+                case PawnProfileSection.Appearance:
+                    if (string.Equals(
+                            _appearance,
+                            normalized,
+                            StringComparison.Ordinal))
+                    {
+                        return true;
+                    }
+                    _appearance = normalized;
+                    break;
+                case PawnProfileSection.BackgroundAndPersonality:
+                    if (string.Equals(
+                            _backgroundAndPersonality,
+                            normalized,
+                            StringComparison.Ordinal))
+                    {
+                        return true;
+                    }
+                    _backgroundAndPersonality = normalized;
+                    break;
+                case PawnProfileSection.PlayerRelationships:
+                    if (string.Equals(
+                            _playerRelationships,
+                            normalized,
+                            StringComparison.Ordinal))
+                    {
+                        return true;
+                    }
+                    _playerRelationships = normalized;
+                    break;
+                case PawnProfileSection.PhobiasAndManias:
+                    if (string.Equals(
+                            _phobiasAndManias,
+                            normalized,
+                            StringComparison.Ordinal))
+                    {
+                        return true;
+                    }
+                    _phobiasAndManias = normalized;
+                    break;
+                case PawnProfileSection.OtherNotes:
+                    if (string.Equals(
+                            _otherNotes,
+                            normalized,
+                            StringComparison.Ordinal))
+                    {
+                        return true;
+                    }
+                    _otherNotes = normalized;
+                    break;
+                default:
+                    return false;
+            }
+
+            Changed?.Invoke();
+            return true;
+        }
+
+        public string GetField(PawnProfileSection section)
+        {
+            EnsureInitialized();
+            switch (section)
+            {
+                case PawnProfileSection.Appearance:
+                    return _appearance;
+                case PawnProfileSection.BackgroundAndPersonality:
+                    return _backgroundAndPersonality;
+                case PawnProfileSection.PlayerRelationships:
+                    return _playerRelationships;
+                case PawnProfileSection.PhobiasAndManias:
+                    return _phobiasAndManias;
+                case PawnProfileSection.OtherNotes:
+                    return _otherNotes;
+                default:
+                    return string.Empty;
+            }
+        }
+
         public PawnProfileRuntimeSnapshot CreateSnapshot()
         {
             EnsureInitialized();
@@ -275,6 +363,7 @@ namespace Trpg.UI.Profile
         private const float FooterHeight = 58f;
         private const float OuterPadding = 14f;
         private const int MaximumTextLength = 16000;
+        private const float EditDebounceSeconds = 0.45f;
 
         private RectTransform _canvasRect;
         private Canvas _rootCanvas;
@@ -310,11 +399,20 @@ namespace Trpg.UI.Profile
         private RectTransform _footer;
         private Vector2 _dragStartPointer;
         private Vector2 _dragStartPanel;
+        private bool _hasPendingEdit;
+        private PawnProfileSection _pendingSection;
+        private string _pendingText = string.Empty;
+        private float _pendingDeadline;
+        private bool _suppressInputCallback;
 
         public event Action CloseRequested;
         public event Action Applied;
+        public event Action<PawnProfileSection, string>
+            ValueEditRequested;
 
         public bool IsVisible => _isVisible;
+        public bool HasActiveEdit =>
+            _hasPendingEdit || (_input != null && _input.isFocused);
 
         public static PawnProfileWidget CreateRuntime(
             RectTransform parentRect,
@@ -392,6 +490,7 @@ namespace Trpg.UI.Profile
             PawnProfileState state,
             string displayName)
         {
+            FlushPendingEdit();
             _state = state;
             _displayName = string.IsNullOrWhiteSpace(displayName)
                 ? "플레이어"
@@ -424,6 +523,7 @@ namespace Trpg.UI.Profile
 
         public void Hide()
         {
+            FlushPendingEdit();
             _isVisible = false;
             if (_canvasGroup != null)
             {
@@ -440,8 +540,40 @@ namespace Trpg.UI.Profile
             if (_state == null)
                 return;
 
+            var preserveDraft = HasActiveEdit && _input != null;
+            var draftSection = _section;
+            var draftText = preserveDraft
+                ? _input.text
+                : string.Empty;
+
             ReadState();
+            if (preserveDraft)
+                SetSectionText(draftSection, draftText);
             RefreshSection();
+        }
+
+        public void FlushPendingEdit()
+        {
+            if (_input != null)
+                StoreCurrentSection();
+
+            if (!_hasPendingEdit)
+                return;
+
+            var section = _pendingSection;
+            var text = _pendingText ?? string.Empty;
+            _hasPendingEdit = false;
+            _pendingText = string.Empty;
+            ValueEditRequested?.Invoke(section, text);
+        }
+
+        private void Update()
+        {
+            if (_hasPendingEdit &&
+                Time.unscaledTime >= _pendingDeadline)
+            {
+                FlushPendingEdit();
+            }
         }
 
         internal void BeginDrag(PointerEventData eventData)
@@ -646,6 +778,8 @@ namespace Trpg.UI.Profile
 
             _input.textComponent = inputText;
             _input.placeholder = _inputPlaceholder;
+            _input.onValueChanged.AddListener(HandleInputValueChanged);
+            _input.onEndEdit.AddListener(HandleInputEndEdit);
 
             _footer = CreatePanel(
                 "Footer",
@@ -681,7 +815,7 @@ namespace Trpg.UI.Profile
 
         private void SelectSection(PawnProfileSection section)
         {
-            StoreCurrentSection();
+            FlushPendingEdit();
             _section = section;
             RefreshSection();
         }
@@ -716,7 +850,9 @@ namespace Trpg.UI.Profile
             if (_input == null)
                 return;
 
+            _suppressInputCallback = true;
             _input.SetTextWithoutNotify(GetSectionText(_section));
+            _suppressInputCallback = false;
             if (_inputPlaceholder != null)
             {
                 _inputPlaceholder.text = GetPlaceholder(_section);
@@ -749,23 +885,69 @@ namespace Trpg.UI.Profile
         private void HandleApplyClicked()
         {
             StoreCurrentSection();
-            if (_state == null ||
-                !_state.TrySet(
-                    _appearance,
-                    _background,
-                    _relationships,
-                    _phobias,
-                    _other))
-            {
-                return;
-            }
-
+            QueueCurrentSectionEdit(true);
             Applied?.Invoke();
         }
 
         private void HandleCloseClicked()
         {
+            FlushPendingEdit();
             CloseRequested?.Invoke();
+        }
+
+        private void HandleInputValueChanged(string text)
+        {
+            if (_suppressInputCallback)
+                return;
+
+            StoreCurrentSection();
+            QueueCurrentSectionEdit(false);
+        }
+
+        private void HandleInputEndEdit(string text)
+        {
+            if (_suppressInputCallback)
+                return;
+
+            StoreCurrentSection();
+            QueueCurrentSectionEdit(true);
+        }
+
+        private void QueueCurrentSectionEdit(bool flushImmediately)
+        {
+            _pendingSection = _section;
+            _pendingText = GetSectionText(_section);
+            _hasPendingEdit = true;
+            _pendingDeadline =
+                Time.unscaledTime + EditDebounceSeconds;
+
+            if (flushImmediately)
+                FlushPendingEdit();
+        }
+
+        private void SetSectionText(
+            PawnProfileSection section,
+            string value)
+        {
+            var normalized = value ?? string.Empty;
+            switch (section)
+            {
+                case PawnProfileSection.Appearance:
+                    _appearance = normalized;
+                    break;
+                case PawnProfileSection.BackgroundAndPersonality:
+                    _background = normalized;
+                    break;
+                case PawnProfileSection.PlayerRelationships:
+                    _relationships = normalized;
+                    break;
+                case PawnProfileSection.PhobiasAndManias:
+                    _phobias = normalized;
+                    break;
+                case PawnProfileSection.OtherNotes:
+                    _other = normalized;
+                    break;
+            }
         }
 
         private void ReadState()
@@ -1042,6 +1224,14 @@ namespace Trpg.UI.Profile
 
         private void OnDestroy()
         {
+            FlushPendingEdit();
+            if (_input != null)
+            {
+                _input.onValueChanged.RemoveListener(
+                    HandleInputValueChanged);
+                _input.onEndEdit.RemoveListener(
+                    HandleInputEndEdit);
+            }
             if (_applyButton != null)
             {
                 _applyButton.onClick.RemoveListener(
@@ -1055,6 +1245,7 @@ namespace Trpg.UI.Profile
 
             CloseRequested = null;
             Applied = null;
+            ValueEditRequested = null;
         }
 
         private static RectTransform CreatePanel(

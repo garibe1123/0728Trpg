@@ -283,6 +283,8 @@ namespace Trpg.Pawns
 
     public sealed class PawnResourceBarWidget : MonoBehaviour
     {
+        private const float EditDebounceSeconds = 0.20f;
+
         private sealed class ResourceVisual
         {
             public GameObject Root;
@@ -297,8 +299,58 @@ namespace Trpg.Pawns
         private RectTransform _rect;
         private GridLayoutGroup _layout;
         private Font _font;
+        private InputField _pendingInput;
+        private string _pendingStatId = string.Empty;
+        private double _pendingValue;
+        private float _pendingDeadline;
+        private bool _hasPendingEdit;
 
         public event Action<string, double> ValueEditRequested;
+
+        public bool HasActiveEdit
+        {
+            get
+            {
+                if (_hasPendingEdit)
+                    return true;
+
+                for (var index = 0; index < _visuals.Count; index++)
+                {
+                    var visual = _visuals[index];
+                    if ((visual.CurrentInput != null &&
+                         visual.CurrentInput.isFocused) ||
+                        (visual.MaximumInput != null &&
+                         visual.MaximumInput.isFocused))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+        }
+
+        public void FlushPendingEdits()
+        {
+            if (!_hasPendingEdit)
+                return;
+
+            var statId = _pendingStatId;
+            var value = _pendingValue;
+            _hasPendingEdit = false;
+            _pendingInput = null;
+            _pendingStatId = string.Empty;
+            ValueEditRequested?.Invoke(statId, value);
+        }
+
+        private void Update()
+        {
+            if (_hasPendingEdit &&
+                Time.unscaledTime >= _pendingDeadline)
+            {
+                FlushPendingEdits();
+            }
+        }
 
         public static PawnResourceBarWidget CreateRuntime(
             RectTransform infoBarPanel,
@@ -364,10 +416,13 @@ namespace Trpg.Pawns
 
         public void Clear()
         {
+            FlushPendingEdits();
             for (var index = 0; index < _visuals.Count; index++)
             {
                 var visual = _visuals[index];
+                visual.CurrentInput.onValueChanged.RemoveAllListeners();
                 visual.CurrentInput.onEndEdit.RemoveAllListeners();
+                visual.MaximumInput.onValueChanged.RemoveAllListeners();
                 visual.MaximumInput.onEndEdit.RemoveAllListeners();
                 visual.Root.SetActive(false);
             }
@@ -540,9 +595,13 @@ namespace Trpg.Pawns
             double value,
             bool canEdit)
         {
+            input.onValueChanged.RemoveAllListeners();
             input.onEndEdit.RemoveAllListeners();
-            input.SetTextWithoutNotify(
-                PawnResourceValueData.FormatNumber(value));
+            if (!input.isFocused)
+            {
+                input.SetTextWithoutNotify(
+                    PawnResourceValueData.FormatNumber(value));
+            }
             input.interactable = canEdit;
 
             var image = input.targetGraphic as Image;
@@ -555,27 +614,48 @@ namespace Trpg.Pawns
 
             if (canEdit && !string.IsNullOrWhiteSpace(statId))
             {
+                input.onValueChanged.AddListener(
+                    text => QueueValueEdit(input, statId, text, false));
                 input.onEndEdit.AddListener(
-                    text => HandleValueEdit(statId, text));
+                    text => QueueValueEdit(input, statId, text, true));
             }
         }
 
-        private void HandleValueEdit(string statId, string text)
+        private void QueueValueEdit(
+            InputField input,
+            string statId,
+            string text,
+            bool flushImmediately)
+        {
+            if (!TryParseValue(text, out var value))
+                return;
+
+            _pendingInput = input;
+            _pendingStatId = statId;
+            _pendingValue = value;
+            _pendingDeadline =
+                Time.unscaledTime + EditDebounceSeconds;
+            _hasPendingEdit = true;
+
+            if (flushImmediately)
+                FlushPendingEdits();
+        }
+
+        private static bool TryParseValue(
+            string text,
+            out double value)
         {
             const NumberStyles styles = NumberStyles.Float;
-            if (double.TryParse(
-                    text,
-                    styles,
-                    CultureInfo.InvariantCulture,
-                    out var value) ||
-                double.TryParse(
-                    text,
-                    styles,
-                    CultureInfo.CurrentCulture,
-                    out value))
-            {
-                ValueEditRequested?.Invoke(statId, value);
-            }
+            return double.TryParse(
+                       text,
+                       styles,
+                       CultureInfo.InvariantCulture,
+                       out value) ||
+                   double.TryParse(
+                       text,
+                       styles,
+                       CultureInfo.CurrentCulture,
+                       out value);
         }
 
         private Text CreateText(
@@ -603,6 +683,7 @@ namespace Trpg.Pawns
 
         private void OnDestroy()
         {
+            FlushPendingEdits();
             ValueEditRequested = null;
         }
     }
@@ -640,6 +721,7 @@ namespace Trpg.Pawns
         private const float RadarMaxSize = 260f;
         private const float AxisLabelMinRadius = 34f;
         private const float AxisLabelMaxRadius = 148f;
+        private const float EditDebounceSeconds = 0.20f;
 
         private enum LayoutFocus
         {
@@ -718,6 +800,10 @@ namespace Trpg.Pawns
         private bool _isExpanded;
         private LayoutFocus _layoutFocus;
         private EntryVisual _editingEntry;
+        private bool _hasPendingValueEdit;
+        private string _pendingStatId = string.Empty;
+        private double _pendingStatValue;
+        private float _pendingValueDeadline;
         private Text _titleText;
         private bool _isEmbedded;
         private bool _legacyLauncherVisible = true;
@@ -751,6 +837,38 @@ namespace Trpg.Pawns
         public bool IsExpanded => _isExpanded;
         public bool IsEmbedded => _isEmbedded;
         public PawnSkillPanelWidget SkillPanel => _skillPanel;
+        public bool HasActiveEdit =>
+            _hasPendingValueEdit ||
+            (_editingEntry != null &&
+             _editingEntry.RegularInput != null &&
+             _editingEntry.RegularInput.isFocused);
+
+        public void FlushPendingEdits()
+        {
+            if (_editingEntry != null &&
+                TryParseModifier(
+                    _editingEntry.RegularInput.text,
+                    out var editingValue))
+            {
+                QueueInlineValueEdit(
+                    _editingEntry.Data.StatId,
+                    editingValue,
+                    true);
+            }
+            else
+            {
+                DispatchPendingValueEdit();
+            }
+        }
+
+        private void Update()
+        {
+            if (_hasPendingValueEdit &&
+                Time.unscaledTime >= _pendingValueDeadline)
+            {
+                DispatchPendingValueEdit();
+            }
+        }
 
         public static PawnStatPanelWidget CreateRuntime(
             RectTransform canvasRect,
@@ -835,6 +953,7 @@ namespace Trpg.Pawns
 
         public void Clear()
         {
+            FlushPendingEdits();
             _isBound = false;
             _isExpanded = false;
             _usedEntryCount = 0;
@@ -1771,7 +1890,12 @@ namespace Trpg.Pawns
         private void BindEntries(
             IReadOnlyList<PawnStatEntryData> entries)
         {
-            CancelInlineEdit();
+            if (_editingEntry != null &&
+                !_editingEntry.RegularInput.isFocused)
+            {
+                FlushPendingEdits();
+                CancelInlineEdit();
+            }
             _usedEntryCount = 0;
             var count = entries != null ? entries.Count : 0;
             for (var index = 0; index < count; index++)
@@ -1964,6 +2088,7 @@ namespace Trpg.Pawns
             visual.ExtremeText.color = difficultyColor;
 
             visual.Button.onClick.RemoveAllListeners();
+            visual.RegularInput.onValueChanged.RemoveAllListeners();
             visual.RegularInput.onEndEdit.RemoveAllListeners();
             visual.RegularInput.gameObject.SetActive(false);
             visual.RegularText.gameObject.SetActive(true);
@@ -2023,12 +2148,15 @@ namespace Trpg.Pawns
 
             _editingEntry = visual;
             var input = visual.RegularInput;
+            input.onValueChanged.RemoveAllListeners();
             input.onEndEdit.RemoveAllListeners();
             input.SetTextWithoutNotify(
                 PawnResourceValueData.FormatNumber(
                     visual.Data.EditableValue));
             visual.RegularText.gameObject.SetActive(false);
             input.gameObject.SetActive(true);
+            input.onValueChanged.AddListener(
+                text => HandleInlineValueChanged(visual, text));
             input.onEndEdit.AddListener(
                 text => CompleteInlineEdit(visual, text));
             FocusAndSelectAll(input);
@@ -2054,6 +2182,7 @@ namespace Trpg.Pawns
 
             var input = visual.RegularInput;
             var wasCanceled = input.wasCanceled;
+            input.onValueChanged.RemoveAllListeners();
             input.onEndEdit.RemoveAllListeners();
             input.gameObject.SetActive(false);
             visual.RegularText.gameObject.SetActive(true);
@@ -2069,9 +2198,61 @@ namespace Trpg.Pawns
             desiredFinalValue = Math.Max(
                 data.MinimumValue,
                 Math.Min(data.MaximumValue, desiredFinalValue));
-            ValueEditRequested?.Invoke(
+            QueueInlineValueEdit(
                 data.StatId,
-                desiredFinalValue);
+                desiredFinalValue,
+                true);
+        }
+
+        private void HandleInlineValueChanged(
+            EntryVisual visual,
+            string text)
+        {
+            if (visual == null ||
+                _editingEntry != visual ||
+                !TryParseModifier(text, out var desiredFinalValue))
+            {
+                return;
+            }
+
+            var data = visual.Data;
+            desiredFinalValue = Math.Max(
+                data.MinimumValue,
+                Math.Min(data.MaximumValue, desiredFinalValue));
+            QueueInlineValueEdit(
+                data.StatId,
+                desiredFinalValue,
+                false);
+        }
+
+        private void QueueInlineValueEdit(
+            string statId,
+            double value,
+            bool flushImmediately)
+        {
+            if (string.IsNullOrWhiteSpace(statId))
+                return;
+
+            _pendingStatId = statId;
+            _pendingStatValue = value;
+            _pendingValueDeadline =
+                Time.unscaledTime + EditDebounceSeconds;
+            _hasPendingValueEdit = true;
+
+            if (flushImmediately)
+                DispatchPendingValueEdit();
+        }
+
+        private void DispatchPendingValueEdit()
+        {
+            if (!_hasPendingValueEdit)
+                return;
+
+            var statId = _pendingStatId;
+            var value = _pendingStatValue;
+            _hasPendingValueEdit = false;
+            _pendingStatId = string.Empty;
+            ValueEditRequested?.Invoke(statId, value);
         }
 
         private void CancelInlineEdit()
@@ -2080,6 +2261,7 @@ namespace Trpg.Pawns
                 return;
 
             var input = _editingEntry.RegularInput;
+            input.onValueChanged.RemoveAllListeners();
             input.onEndEdit.RemoveAllListeners();
             input.gameObject.SetActive(false);
             _editingEntry.RegularText.gameObject.SetActive(true);
@@ -2207,6 +2389,7 @@ namespace Trpg.Pawns
             if (!_isBound || !_isExpanded || _skillPanel == null)
                 return;
 
+            FlushPendingEdits();
             CancelInlineEdit();
             _skillPanel.ToggleExpanded();
             if (!_skillPanel.IsExpanded)
@@ -2216,6 +2399,7 @@ namespace Trpg.Pawns
 
         private void HandleCloseClicked()
         {
+            FlushPendingEdits();
             SetExpanded(false);
         }
 
@@ -2708,6 +2892,7 @@ namespace Trpg.Pawns
 
         private void OnDestroy()
         {
+            FlushPendingEdits();
             KillDrawerTransition();
             KillSummaryHoverTween();
             KillLayoutTween();

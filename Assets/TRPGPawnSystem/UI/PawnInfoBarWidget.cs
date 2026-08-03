@@ -165,6 +165,16 @@ namespace Trpg.Pawns
             }
         }
 
+        public bool HasActiveStatEdit =>
+            (_resourceBar != null && _resourceBar.HasActiveEdit) ||
+            (_statPanel != null && _statPanel.HasActiveEdit);
+
+        public void FlushPendingStatEdits()
+        {
+            _resourceBar?.FlushPendingEdits();
+            _statPanel?.FlushPendingEdits();
+        }
+
         public void SetBoardStackMode(bool enabled)
         {
             _boardStackMode = enabled;

@@ -4,6 +4,55 @@ using Trpg.Domain.Stats;
 using UnityEngine;
 namespace Trpg.Pawns
 {
+    public readonly struct PawnMovementCommitData
+    {
+        private readonly Vector3[] _corners;
+
+        public PawnMovementCommitData(
+            InteractivePawn pawn,
+            Vector3[] corners,
+            Vector2 destination,
+            float moveCost,
+            float remainingMeters,
+            float maximumMeters)
+        {
+            Pawn = pawn;
+            _corners = corners != null
+                ? (Vector3[])corners.Clone()
+                : Array.Empty<Vector3>();
+            Destination = destination;
+            MoveCost = moveCost;
+            RemainingMeters = remainingMeters;
+            MaximumMeters = maximumMeters;
+        }
+
+        public InteractivePawn Pawn { get; }
+        public Vector2 Destination { get; }
+        public float MoveCost { get; }
+        public float RemainingMeters { get; }
+        public float MaximumMeters { get; }
+        public int CornerCount => _corners != null ? _corners.Length : 0;
+
+        public Vector3 GetCorner(int index)
+        {
+            if (_corners == null ||
+                index < 0 ||
+                index >= _corners.Length)
+            {
+                throw new ArgumentOutOfRangeException(nameof(index));
+            }
+
+            return _corners[index];
+        }
+
+        public Vector3[] CopyCorners()
+        {
+            return _corners != null
+                ? (Vector3[])_corners.Clone()
+                : Array.Empty<Vector3>();
+        }
+    }
+
     [RequireComponent(typeof(PawnMovementRangeManager))]
     [RequireComponent(typeof(PawnDoorManager))]
     public sealed class PawnMovementManager : MonoBehaviour
@@ -28,6 +77,7 @@ namespace Trpg.Pawns
         private PawnMovementRangeManager _movementRangeManager;
         private PawnDoorManager _doorManager;
         public event Action<InteractivePawn, Vector2> PawnMoved;
+        public event Action<PawnMovementCommitData> MovementCommitted;
         public event Action<InteractivePawn, Vector2> DoorTransferred;
         public event Action<InteractivePawn, float, float>
             MovementBudgetChanged;
@@ -127,6 +177,7 @@ namespace Trpg.Pawns
             }
             var destination = SnapIfEnabled(requestedPosition);
             if (!TryResolveValidPath(
+                    _selectedMover,
                     state.Position,
                     destination,
                     out var corners,
@@ -154,14 +205,30 @@ namespace Trpg.Pawns
         }
         public bool TryMoveSelectedTo(Vector2 requestedPosition)
         {
-            if (_selectedMover == null ||
-                _presentingMovers.Contains(_selectedMover) ||
-                !_states.TryGetValue(_selectedMover, out var state))
+            return TryMovePawnTo(
+                _selectedMover,
+                requestedPosition,
+                out _);
+        }
+
+        public bool TryMovePawnTo(
+            InteractivePawn pawn,
+            Vector2 requestedPosition,
+            out PawnMovementCommitData commit)
+        {
+            commit = default;
+
+            if (pawn == null ||
+                !pawn.IsMoveable ||
+                _presentingMovers.Contains(pawn) ||
+                !_states.TryGetValue(pawn, out var state))
             {
                 return false;
             }
+
             var destination = SnapIfEnabled(requestedPosition);
             if (!TryResolveValidPath(
+                    pawn,
                     state.Position,
                     destination,
                     out var corners,
@@ -171,25 +238,126 @@ namespace Trpg.Pawns
             {
                 return false;
             }
+
             var moveCost = QuantizeDistance(length);
             if (moveCost > state.RemainingMeters + PathEpsilon)
             {
                 return false;
             }
+
             state.Position = projectedDestination;
             state.RemainingMeters = QuantizeRemainingDistance(
                 state.RemainingMeters - moveCost);
-            _presentingMovers.Add(_selectedMover);
+
+            _presentingMovers.Add(pawn);
             HideReachableArea();
             HidePathPreview();
-            _selectedMover.PresentMovement(corners);
+            pawn.PresentMovement(corners);
+
             MovementBudgetChanged?.Invoke(
-                _selectedMover,
+                pawn,
                 state.RemainingMeters,
                 state.MaximumMeters);
-            PawnMoved?.Invoke(_selectedMover, state.Position);
+            PawnMoved?.Invoke(pawn, state.Position);
+
+            commit = new PawnMovementCommitData(
+                pawn,
+                corners,
+                state.Position,
+                moveCost,
+                state.RemainingMeters,
+                state.MaximumMeters);
+            MovementCommitted?.Invoke(commit);
             return true;
         }
+
+        public bool ApplyReplicatedMove(
+            InteractivePawn pawn,
+            Vector3[] corners,
+            Vector2 destination,
+            float remainingMeters,
+            float maximumMeters)
+        {
+            if (pawn == null || !pawn.IsMoveable)
+                return false;
+
+            var resolvedCorners = corners != null && corners.Length >= 2
+                ? (Vector3[])corners.Clone()
+                : new[]
+                {
+                    pawn.PresentationWorldPosition,
+                    new Vector3(destination.x, destination.y, 0f)
+                };
+
+            _states[pawn] = new PawnMovementState(
+                destination,
+                Mathf.Max(0f, remainingMeters),
+                Mathf.Max(0f, maximumMeters));
+            _presentingMovers.Remove(pawn);
+            _presentingMovers.Add(pawn);
+            HidePathPreview();
+            pawn.PresentMovement(resolvedCorners);
+
+            MovementBudgetChanged?.Invoke(
+                pawn,
+                Mathf.Max(0f, remainingMeters),
+                Mathf.Max(0f, maximumMeters));
+            PawnMoved?.Invoke(pawn, destination);
+            return true;
+        }
+
+        public bool ApplyReplicatedSnapshot(
+            InteractivePawn pawn,
+            Vector2 position,
+            float remainingMeters,
+            float maximumMeters)
+        {
+            if (pawn == null)
+                return false;
+
+            _presentingMovers.Remove(pawn);
+            if (pawn.IsMoveable)
+            {
+                _states[pawn] = new PawnMovementState(
+                    position,
+                    Mathf.Max(0f, remainingMeters),
+                    Mathf.Max(0f, maximumMeters));
+
+                MovementBudgetChanged?.Invoke(
+                    pawn,
+                    Mathf.Max(0f, remainingMeters),
+                    Mathf.Max(0f, maximumMeters));
+            }
+
+            pawn.TeleportTo(position);
+            PawnMoved?.Invoke(pawn, position);
+
+            if (pawn == _selectedMover)
+                RefreshReachableArea();
+
+            return true;
+        }
+
+        public bool ApplyReplicatedDoorTransfer(
+            InteractivePawn pawn,
+            Vector2 destination)
+        {
+            if (pawn == null)
+                return false;
+
+            _presentingMovers.Remove(pawn);
+            if (_states.TryGetValue(pawn, out var state))
+                state.Position = destination;
+
+            pawn.TeleportTo(destination);
+            DoorTransferred?.Invoke(pawn, destination);
+
+            if (pawn == _selectedMover)
+                RefreshReachableArea();
+
+            return true;
+        }
+
         public void ResetMovementBudget(InteractivePawn pawn)
         {
             if (pawn == null || !_states.TryGetValue(pawn, out var state))
@@ -482,6 +650,7 @@ namespace Trpg.Pawns
             return false;
         }
         private bool TryResolveValidPath(
+            InteractivePawn movingPawn,
             Vector2 origin,
             Vector2 requestedDestination,
             out Vector3[] corners,
@@ -510,10 +679,12 @@ namespace Trpg.Pawns
                 finalCorner.y);
 
             return !IsDestinationBlockedByInteractivePawn(
+                movingPawn,
                 projectedDestination);
         }
 
         private bool IsDestinationBlockedByInteractivePawn(
+            InteractivePawn movingPawn,
             Vector2 destination)
         {
             var clearance = Mathf.Max(
@@ -526,7 +697,7 @@ namespace Trpg.Pawns
             {
                 var pawn = _interactivePawns[pawnIndex];
                 if (pawn == null ||
-                    pawn == _selectedMover ||
+                    pawn == movingPawn ||
                     !pawn.gameObject.activeInHierarchy)
                 {
                     continue;

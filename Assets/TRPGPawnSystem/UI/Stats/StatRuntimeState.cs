@@ -885,6 +885,42 @@ namespace Trpg.Domain.Stats
             }
         }
 
+        /// <summary>
+        /// Host가 권한 검증을 마친 값 또는 네트워크 확정값을 적용합니다.
+        /// Runtime 스탯은 IsAdjustable과 무관하게 표시값 기준으로 갱신합니다.
+        /// 일반 UI 입력은 TrySetDisplayedValue를 사용해야 합니다.
+        /// </summary>
+        public bool TrySetAuthoritativeDisplayedValue(
+            string statId,
+            double value)
+        {
+            if (double.IsNaN(value) ||
+                double.IsInfinity(value) ||
+                !_definitions.TryGetValue(statId, out var definition))
+            {
+                return false;
+            }
+
+            switch (definition.Source)
+            {
+                case StatValueSource.Base:
+                    SetBaseDisplayedValue(definition, value);
+                    NormalizeRuntimeValues();
+                    Changed?.Invoke();
+                    return true;
+
+                case StatValueSource.Runtime:
+                    var modifierTotal = GetModifierTotal(statId);
+                    _runtimeValues[statId] =
+                        Clamp(definition, value - modifierTotal);
+                    Changed?.Invoke();
+                    return true;
+
+                default:
+                    return false;
+            }
+        }
+
         public bool AddModifier(string statId, string sourceId, double amount)
         {
             if (!_definitions.ContainsKey(statId) || string.IsNullOrWhiteSpace(sourceId))

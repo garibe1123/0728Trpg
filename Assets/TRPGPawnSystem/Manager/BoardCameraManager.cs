@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;
@@ -38,6 +39,7 @@ namespace Trpg.Pawns
         [Header("References")]
         [SerializeField] private Camera _boardCamera;
         [SerializeField] private PawnManager _pawnManager;
+        [SerializeField] private TRPGSessionAuthority _sessionAuthority;
 
         [Header("Zoom")]
         [SerializeField, Range(0.1f, 1f)]
@@ -56,6 +58,8 @@ namespace Trpg.Pawns
         [SerializeField] private bool _allowMiddleDrag = true;
         [SerializeField, Min(0f)]
         private float _dragThresholdPixels = 5f;
+        [SerializeField, Min(0f)]
+        private float _playerPanRadius = 4f;
         [SerializeField]
         private bool _blockInputOverUi = true;
 
@@ -73,6 +77,18 @@ namespace Trpg.Pawns
         private InteractivePawn _selection;
         private InteractivePawn _previousSelection;
         private int _selectionChangedFrame = -1;
+        private bool _leftPressPending;
+        private bool _leftReleasePending;
+        private bool _middlePressPending;
+        private bool _middleReleasePending;
+        private float _pendingScrollY;
+        private bool _pointerOverUi;
+        private Vector2 _lastUiRaycastPointer;
+        private int _lastUiRaycastFrame = -1;
+        private EventSystem _cachedEventSystem;
+        private PointerEventData _pointerEventData;
+        private readonly List<RaycastResult> _uiRaycastResults =
+            new List<RaycastResult>(16);
 
         public event Action<BoardCameraState> CameraStateChanged;
 
@@ -85,7 +101,10 @@ namespace Trpg.Pawns
             : 0f;
         public bool IsPanning =>
             _dragButton != DragButton.None && _dragStarted;
-        public bool IsPlayerCameraLocked => IsPlayerPawn(_selection);
+        public bool IsPlayerCameraLocked =>
+            _sessionAuthority != null &&
+            _sessionAuthority.IsOnline &&
+            !_sessionAuthority.CanLocalControlCamera;
 
         private void Awake()
         {
@@ -117,7 +136,6 @@ namespace Trpg.Pawns
             _leftAction.canceled += HandleLeftReleased;
             _middleAction.performed += HandleMiddlePressed;
             _middleAction.canceled += HandleMiddleReleased;
-            _pointAction.performed += HandlePointerMoved;
 
             _scrollAction.Enable();
             _leftAction.Enable();
@@ -149,9 +167,9 @@ namespace Trpg.Pawns
                 _middleAction.canceled -= HandleMiddleReleased;
                 _middleAction.Disable();
             }
-            UnbindAndDisable(
-                _pointAction,
-                HandlePointerMoved);
+            if (_pointAction != null)
+                _pointAction.Disable();
+            ClearPendingInput();
         }
 
         private void OnDestroy()
@@ -166,6 +184,16 @@ namespace Trpg.Pawns
         private void OnValidate()
         {
             NormalizeValues();
+        }
+
+        private void Update()
+        {
+            if (!enabled || _boardCamera == null)
+                return;
+
+            RefreshPointerOverUiCache();
+            ProcessPendingInput();
+            ProcessDrag();
         }
 
         public BoardCameraState CaptureState()
@@ -248,10 +276,69 @@ namespace Trpg.Pawns
 
         private void HandleScroll(InputAction.CallbackContext context)
         {
-            var scrollY = context.ReadValue<Vector2>().y;
+            _pendingScrollY += context.ReadValue<Vector2>().y;
+        }
+
+        private void HandleLeftPressed(
+            InputAction.CallbackContext context)
+        {
+            if (_allowLeftDrag)
+                _leftPressPending = true;
+        }
+
+        private void HandleLeftReleased(
+            InputAction.CallbackContext context)
+        {
+            _leftReleasePending = true;
+        }
+
+        private void HandleMiddlePressed(
+            InputAction.CallbackContext context)
+        {
+            if (_allowMiddleDrag)
+                _middlePressPending = true;
+        }
+
+        private void HandleMiddleReleased(
+            InputAction.CallbackContext context)
+        {
+            _middleReleasePending = true;
+        }
+
+        private void ProcessPendingInput()
+        {
+            if (_leftReleasePending)
+            {
+                _leftReleasePending = false;
+                if (_dragButton == DragButton.Left)
+                    CancelDrag();
+            }
+
+            if (_middleReleasePending)
+            {
+                _middleReleasePending = false;
+                if (_dragButton == DragButton.Middle)
+                    CancelDrag();
+            }
+
+            if (_leftPressPending)
+            {
+                _leftPressPending = false;
+                TryBeginDrag(DragButton.Left);
+            }
+
+            if (_middlePressPending)
+            {
+                _middlePressPending = false;
+                TryBeginDrag(DragButton.Middle);
+            }
+
+            var scrollY = _pendingScrollY;
+            _pendingScrollY = 0f;
             if (Mathf.Abs(scrollY) <= 0.001f ||
-                !TryGetPointer(out var pointer) ||
-                IsPointerOverUi())
+                IsPlayerCameraLocked ||
+                _pointerOverUi ||
+                !TryGetPointer(out var pointer))
             {
                 return;
             }
@@ -268,36 +355,7 @@ namespace Trpg.Pawns
             PublishState();
         }
 
-        private void HandleLeftPressed(
-            InputAction.CallbackContext context)
-        {
-            if (_allowLeftDrag)
-                TryBeginDrag(DragButton.Left);
-        }
-
-        private void HandleLeftReleased(
-            InputAction.CallbackContext context)
-        {
-            if (_dragButton == DragButton.Left)
-                CancelDrag();
-        }
-
-        private void HandleMiddlePressed(
-            InputAction.CallbackContext context)
-        {
-            if (_allowMiddleDrag)
-                TryBeginDrag(DragButton.Middle);
-        }
-
-        private void HandleMiddleReleased(
-            InputAction.CallbackContext context)
-        {
-            if (_dragButton == DragButton.Middle)
-                CancelDrag();
-        }
-
-        private void HandlePointerMoved(
-            InputAction.CallbackContext context)
+        private void ProcessDrag()
         {
             if (_dragButton == DragButton.None)
                 return;
@@ -314,7 +372,12 @@ namespace Trpg.Pawns
                 return;
             }
 
-            var pointer = context.ReadValue<Vector2>();
+            if (!TryGetPointer(out var pointer))
+            {
+                CancelDrag();
+                return;
+            }
+
             if (!_dragStarted)
             {
                 if ((pointer - _dragStart).sqrMagnitude <
@@ -323,7 +386,12 @@ namespace Trpg.Pawns
                     _lastPointer = pointer;
                     return;
                 }
+
+                // The threshold-crossing frame establishes a new origin.
+                // Do not apply the accumulated pre-drag delta as a camera jump.
                 _dragStarted = true;
+                _lastPointer = pointer;
+                return;
             }
 
             var delta = pointer - _lastPointer;
@@ -338,9 +406,9 @@ namespace Trpg.Pawns
         private void TryBeginDrag(DragButton button)
         {
             if (_dragButton != DragButton.None ||
-                WasPlayerSelectedAtPress() ||
+                IsPlayerCameraLocked ||
                 !TryGetPointer(out var pointer) ||
-                IsPointerOverUi())
+                _pointerOverUi)
             {
                 return;
             }
@@ -364,7 +432,33 @@ namespace Trpg.Pawns
                 transform.right * (screenDelta.x * unitsPerPixel) +
                 transform.up * (screenDelta.y * unitsPerPixel);
             movement.z = 0f;
-            transform.position -= movement;
+            var candidate = transform.position - movement;
+            transform.position = ClampToControlledPawn(candidate);
+        }
+
+
+        private Vector3 ClampToControlledPawn(Vector3 candidate)
+        {
+            if (_sessionAuthority == null ||
+                !_sessionAuthority.IsOnline ||
+                _sessionAuthority.IsLocalGameMaster ||
+                !_sessionAuthority.TryGetLocalControlledPawn(out var pawn))
+            {
+                return candidate;
+            }
+
+            var radius = Mathf.Max(0f, _playerPanRadius);
+            var anchor = pawn.WorldPosition;
+            var offset = new Vector2(
+                candidate.x - anchor.x,
+                candidate.y - anchor.y);
+            if (offset.sqrMagnitude <= radius * radius)
+                return candidate;
+
+            var clamped = offset.normalized * radius;
+            candidate.x = anchor.x + clamped.x;
+            candidate.y = anchor.y + clamped.y;
+            return candidate;
         }
 
         private void ApplyZoom(
@@ -493,11 +587,59 @@ namespace Trpg.Pawns
             return false;
         }
 
-        private bool IsPointerOverUi()
+        private void RefreshPointerOverUiCache()
         {
-            return _blockInputOverUi &&
-                   EventSystem.current != null &&
-                   EventSystem.current.IsPointerOverGameObject();
+            if (!_blockInputOverUi ||
+                !TryGetPointer(out var pointer))
+            {
+                _pointerOverUi = false;
+                return;
+            }
+
+            var requiresFreshRaycast =
+                _lastUiRaycastFrame != Time.frameCount &&
+                ((_lastUiRaycastPointer - pointer).sqrMagnitude > 0.01f ||
+                 _leftPressPending ||
+                 _middlePressPending ||
+                 Mathf.Abs(_pendingScrollY) > 0.001f ||
+                 _dragButton != DragButton.None);
+            if (!requiresFreshRaycast)
+                return;
+
+            _lastUiRaycastFrame = Time.frameCount;
+            _lastUiRaycastPointer = pointer;
+            var eventSystem = EventSystem.current;
+            if (eventSystem == null)
+            {
+                _pointerOverUi = false;
+                return;
+            }
+
+            if (_cachedEventSystem != eventSystem ||
+                _pointerEventData == null)
+            {
+                _cachedEventSystem = eventSystem;
+                _pointerEventData = new PointerEventData(eventSystem);
+            }
+
+            _pointerEventData.Reset();
+            _pointerEventData.position = pointer;
+            _uiRaycastResults.Clear();
+            eventSystem.RaycastAll(
+                _pointerEventData,
+                _uiRaycastResults);
+            _pointerOverUi = _uiRaycastResults.Count > 0;
+        }
+
+        private void ClearPendingInput()
+        {
+            _leftPressPending = false;
+            _leftReleasePending = false;
+            _middlePressPending = false;
+            _middleReleasePending = false;
+            _pendingScrollY = 0f;
+            _pointerOverUi = false;
+            _uiRaycastResults.Clear();
         }
 
         private bool ValidateReferences()
@@ -540,8 +682,9 @@ namespace Trpg.Pawns
                 0.01f,
                 0.5f);
             _dragThresholdPixels = Mathf.Max(
-                0f,
+                8f,
                 _dragThresholdPixels);
+            _playerPanRadius = Mathf.Max(0f, _playerPanRadius);
         }
 
         private void CancelDrag()
