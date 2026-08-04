@@ -56,6 +56,7 @@ namespace Trpg.Pawns
     public sealed class PawnRollWidget : MonoBehaviour
     {
         private const float MinimumPresentationDuration = 0.25f;
+        private const float SequentialCounterStepSeconds = 0.035f;
         private const float PanelOpenDuration = 0.24f;
         private const int MaximumVisibleOutcomeLabels = 100;
         private const float MinimumActionButtonSize = 54f;
@@ -106,6 +107,13 @@ namespace Trpg.Pawns
         private D100CheckThresholds _activeCheckThresholds;
         private int _presentationSerial;
         private int _lastPresentedSelection = int.MinValue;
+        private bool _sequentialCounterActive;
+        private float _sequentialCounterStartedAt;
+        private float _sequentialCounterDuration;
+        private int _sequentialCounterMinimum;
+        private int _sequentialCounterMaximum;
+        private int _sequentialCounterFinal;
+        private int _sequentialCounterCurrent;
 
         public event Action RollInputOpened;
         public event Action<PawnCheckRollRequest> CheckRollRequested;
@@ -302,9 +310,11 @@ namespace Trpg.Pawns
             var outcomeCount = Mathf.Max(
                 1,
                 maximum - minimum + 1);
+            var counterDistance = Mathf.Abs(finalValue - minimum);
             var duration = Mathf.Max(
                 MinimumPresentationDuration,
-                data.DurationSeconds);
+                data.DurationSeconds,
+                counterDistance * SequentialCounterStepSeconds);
             var pointerRotations = Mathf.Max(
                 0.25f,
                 data.PointerRotations);
@@ -349,6 +359,12 @@ namespace Trpg.Pawns
                 _counterText.text = minimum.ToString();
                 _counterText.rectTransform.localScale = Vector3.one;
             }
+
+            BeginSequentialCounter(
+                minimum,
+                maximum,
+                finalValue,
+                duration);
 
             var visualRandom = CreateVisualRandom(finalValue);
             var finalIndex = finalValue - minimum;
@@ -498,6 +514,15 @@ namespace Trpg.Pawns
                 0f,
                 1f,
                 false);
+
+            while (_sequentialCounterCurrent != finalValue)
+            {
+                AdvanceSequentialCounter(
+                    finalValue,
+                    0.52f);
+                yield return null;
+            }
+            _sequentialCounterActive = false;
 
             if (_counterText != null)
             {
@@ -678,31 +703,95 @@ namespace Trpg.Pawns
                     pointerAngle);
             }
 
-            var value = ResolvePointerValue(
-                minimum,
-                outcomeCount,
-                pointerAngle);
-            if (value == _lastPresentedSelection)
-            {
-                return;
-            }
+            UpdateSequentialCounter(
+                Mathf.Max(tickVolume, 0.32f),
+                Mathf.Max(1f, pulseScale));
+        }
 
+        private void BeginSequentialCounter(
+            int minimum,
+            int maximum,
+            int finalValue,
+            float duration)
+        {
+            _sequentialCounterMinimum = minimum;
+            _sequentialCounterMaximum = maximum;
+            _sequentialCounterFinal = finalValue;
+            _sequentialCounterCurrent = minimum;
+            _sequentialCounterDuration = Mathf.Max(
+                MinimumPresentationDuration,
+                duration);
+            _sequentialCounterStartedAt = Time.unscaledTime;
+            _sequentialCounterActive = true;
+            _lastPresentedSelection = minimum;
+            UpdateCounterPresentation(minimum, false, 0f, 1f);
+        }
+
+        private void UpdateSequentialCounter(
+            float tickVolume,
+            float pulseScale)
+        {
+            if (!_sequentialCounterActive)
+                return;
+
+            var elapsed = Mathf.Max(
+                0f,
+                Time.unscaledTime - _sequentialCounterStartedAt);
+            var normalized = Mathf.Clamp01(
+                elapsed / _sequentialCounterDuration);
+            var targetValue = Mathf.RoundToInt(
+                Mathf.Lerp(
+                    _sequentialCounterMinimum,
+                    _sequentialCounterFinal,
+                    normalized));
+            AdvanceSequentialCounter(
+                targetValue,
+                tickVolume,
+                pulseScale);
+        }
+
+        private void AdvanceSequentialCounter(
+            int targetValue,
+            float tickVolume,
+            float pulseScale = 1.08f)
+        {
+            if (_sequentialCounterCurrent == targetValue)
+                return;
+
+            _sequentialCounterCurrent += Math.Sign(
+                targetValue - _sequentialCounterCurrent);
+            UpdateCounterPresentation(
+                _sequentialCounterCurrent,
+                true,
+                tickVolume,
+                pulseScale);
+        }
+
+        private void UpdateCounterPresentation(
+            int value,
+            bool playTick,
+            float tickVolume,
+            float pulseScale)
+        {
             _lastPresentedSelection = value;
-            UpdateCurrentSelection(
-                minimum,
-                maximum,
-                outcomeCount,
-                pointerAngle);
             if (_counterText != null)
             {
+                _counterText.text = value.ToString();
+                _counterText.color = _showsCheckThresholds
+                    ? PawnRouletteGradePalette.GetLabelColor(
+                        _activeCheckThresholds.GetGrade(value))
+                    : Color.white;
                 _counterText.rectTransform.localScale =
                     Vector3.one * Mathf.Max(1f, pulseScale);
             }
 
+            UpdateNearMissLabel(
+                _sequentialCounterMinimum,
+                _sequentialCounterMaximum,
+                value);
+
             if (playTick && tickVolume > 0f)
-            {
                 PlayOneShot(_tickClip, tickVolume);
-            }
         }
 
         private void RelaxCounterScale()
@@ -1655,6 +1744,7 @@ namespace Trpg.Pawns
 
             StopCoroutine(_presentationRoutine);
             _presentationRoutine = null;
+            _sequentialCounterActive = false;
         }
 
         private void PlayOneShot(AudioClip clip, float volume)

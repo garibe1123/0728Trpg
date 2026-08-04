@@ -163,6 +163,7 @@ namespace Trpg.Pawns
             if (!IsLocalGameMaster ||
                 _applyingRemoteState ||
                 pawn == null ||
+                !pawn.HasFullCharacterSheet ||
                 pawn.Definition == null)
             {
                 return;
@@ -189,6 +190,7 @@ namespace Trpg.Pawns
             if (!ShouldRouteClientInventoryChange ||
                 !IsGameplayReady ||
                 pawn == null ||
+                !pawn.HasFullCharacterSheet ||
                 pawn.Definition == null)
             {
                 PublishLocalMessage(
@@ -547,8 +549,12 @@ namespace Trpg.Pawns
         private static PlayerInventoryState ResolveInventoryState(
             InteractivePawn pawn)
         {
-            if (pawn == null || pawn.Definition == null)
+            if (pawn == null ||
+                !pawn.HasFullCharacterSheet ||
+                pawn.Definition == null)
+            {
                 return null;
+            }
 
             return PlayerInventoryState.ResolveOrCreate(
                 pawn.gameObject,
@@ -599,6 +605,9 @@ namespace Trpg.Pawns
             PlayerRef target,
             InteractivePawn pawn)
         {
+            if (pawn == null || !pawn.HasFullCharacterSheet)
+                return;
+
             var state = ResolveInventoryState(pawn);
             if (state == null ||
                 pawn == null ||

@@ -20,34 +20,37 @@ namespace Trpg.Editor
         private static void CreateObstacle(MenuCommand command) =>
             CreateFieldPawn(command, FieldPawnKind.Obstacle, "ObstaclePawn");
 
-        [MenuItem(MenuRoot + "Interactive/Moveable Player", false, 20)]
-        private static void CreateMoveablePlayer(MenuCommand command)
+        [MenuItem(MenuRoot + "Interactive/Player", false, 20)]
+        private static void CreatePlayer(MenuCommand command)
         {
             CreateInteractivePawn(
                 command,
                 InteractivePawnKind.Moveable,
                 MoveablePawnKind.Player,
+                NpcMovementMode.Fixed,
                 "PlayerPawn");
         }
 
-        [MenuItem(MenuRoot + "Interactive/Moveable Monster", false, 21)]
-        private static void CreateMoveableMonster(MenuCommand command)
-        {
-            CreateInteractivePawn(
-                command,
-                InteractivePawnKind.Moveable,
-                MoveablePawnKind.Monster,
-                "MonsterPawn");
-        }
-
-        [MenuItem(MenuRoot + "Interactive/NPC", false, 22)]
-        private static void CreateNpc(MenuCommand command)
+        [MenuItem(MenuRoot + "Interactive/NPC Fixed", false, 21)]
+        private static void CreateFixedNpc(MenuCommand command)
         {
             CreateInteractivePawn(
                 command,
                 InteractivePawnKind.Npc,
                 MoveablePawnKind.Player,
+                NpcMovementMode.Fixed,
                 "NpcPawn");
+        }
+
+        [MenuItem(MenuRoot + "Interactive/NPC Walkable", false, 22)]
+        private static void CreateWalkableNpc(MenuCommand command)
+        {
+            CreateInteractivePawn(
+                command,
+                InteractivePawnKind.Npc,
+                MoveablePawnKind.Player,
+                NpcMovementMode.Walkable,
+                "WalkableNpcPawn");
         }
 
         [MenuItem(MenuRoot + "Interactive/Door", false, 23)]
@@ -57,6 +60,7 @@ namespace Trpg.Editor
                 command,
                 InteractivePawnKind.Door,
                 MoveablePawnKind.Player,
+                NpcMovementMode.Fixed,
                 "DoorPawn");
         }
 
@@ -90,6 +94,7 @@ namespace Trpg.Editor
             MenuCommand command,
             InteractivePawnKind kind,
             MoveablePawnKind moveableKind,
+            NpcMovementMode npcMovementMode,
             string objectName)
         {
             if (!CanCreatePawn())
@@ -103,7 +108,11 @@ namespace Trpg.Editor
                 "interactive",
                 kind.ToString());
             var definition = CreateInteractiveDefinition(
-                objectName, instanceId, kind, moveableKind);
+                objectName,
+                instanceId,
+                kind,
+                moveableKind,
+                npcMovementMode);
             var pawnObject =
                 CreatePawnObject(command, objectName, undoName);
             var pawn = Undo.AddComponent<InteractivePawn>(pawnObject);
@@ -111,7 +120,9 @@ namespace Trpg.Editor
 
             AssignPawnData(pawn, instanceId, definition);
 
-            if (kind == InteractivePawnKind.Moveable)
+            if (kind == InteractivePawnKind.Moveable ||
+                (kind == InteractivePawnKind.Npc &&
+                 npcMovementMode == NpcMovementMode.Walkable))
             {
                 var visualRoot = CreateChild(
                     pawnObject.transform, "VisualRoot", undoName);
@@ -213,7 +224,8 @@ namespace Trpg.Editor
             string objectName,
             string instanceId,
             InteractivePawnKind kind,
-            MoveablePawnKind moveableKind)
+            MoveablePawnKind moveableKind,
+            NpcMovementMode npcMovementMode)
         {
             EnsureAssetFolder(GeneratedDefinitionFolder);
 
@@ -227,6 +239,8 @@ namespace Trpg.Editor
             SetEnum(serializedDefinition, "_kind", (int)kind);
             SetEnum(serializedDefinition, "_moveableKind",
                 (int)moveableKind);
+            SetEnum(serializedDefinition, "_npcMovementMode",
+                (int)npcMovementMode);
             SetString(
                 serializedDefinition,
                 "_displayName",

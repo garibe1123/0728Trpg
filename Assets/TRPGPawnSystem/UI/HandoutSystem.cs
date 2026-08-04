@@ -212,8 +212,9 @@ namespace Trpg.UI.Handouts
 
             if (state == null)
             {
-                state = UnityEngine.Object.FindObjectOfType<
-                    PublicHandoutState>(true);
+                state = UnityEngine.Object.FindFirstObjectByType<
+                    PublicHandoutState>(
+                    FindObjectsInactive.Include);
             }
 
             if (state == null && preferredHost != null)

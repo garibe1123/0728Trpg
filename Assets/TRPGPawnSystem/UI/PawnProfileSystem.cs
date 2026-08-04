@@ -285,8 +285,12 @@ namespace Trpg.UI.Profile
             GameObject selectedObject,
             InteractivePawnDefinition definition)
         {
-            if (selectedObject == null || definition == null)
+            if (selectedObject == null ||
+                definition == null ||
+                !definition.SupportsFullCharacterSheet)
+            {
                 return null;
+            }
 
             var pawn = ResolveInteractivePawn(selectedObject);
             var root = pawn != null
@@ -404,6 +408,7 @@ namespace Trpg.UI.Profile
         private string _pendingText = string.Empty;
         private float _pendingDeadline;
         private bool _suppressInputCallback;
+        private bool _isReadOnly;
 
         public event Action CloseRequested;
         public event Action Applied;
@@ -435,6 +440,35 @@ namespace Trpg.UI.Profile
 
         public RectTransform RootRect => _panel;
         public bool IsEmbedded => _isEmbedded;
+        public bool IsReadOnly => _isReadOnly;
+
+        public void SetReadOnly(bool readOnly)
+        {
+            if (_isReadOnly == readOnly)
+                return;
+
+            if (readOnly)
+                FlushPendingEdit();
+
+            _isReadOnly = readOnly;
+            ApplyReadOnlyState();
+        }
+
+        private void ApplyReadOnlyState()
+        {
+            if (_input != null)
+                _input.interactable = !_isReadOnly;
+
+            if (_applyButton != null)
+                _applyButton.gameObject.SetActive(!_isReadOnly);
+
+            if (_inputPlaceholder != null)
+            {
+                _inputPlaceholder.text = _isReadOnly
+                    ? "열람 전용"
+                    : "내용을 입력하십시오.";
+            }
+        }
 
         public void SetEmbeddedMode(
             RectTransform host,
@@ -499,6 +533,7 @@ namespace Trpg.UI.Profile
             _section = PawnProfileSection.Appearance;
             RefreshSection();
             RefreshTitle();
+            ApplyReadOnlyState();
         }
 
         public void Show(RectTransform portraitAnchor)
@@ -519,6 +554,7 @@ namespace Trpg.UI.Profile
             _isVisible = true;
             gameObject.SetActive(true);
             RefreshSection();
+            ApplyReadOnlyState();
         }
 
         public void Hide()
@@ -554,6 +590,13 @@ namespace Trpg.UI.Profile
 
         public void FlushPendingEdit()
         {
+            if (_isReadOnly)
+            {
+                _hasPendingEdit = false;
+                _pendingText = string.Empty;
+                return;
+            }
+
             if (_input != null)
                 StoreCurrentSection();
 
@@ -809,6 +852,7 @@ namespace Trpg.UI.Profile
                 new Vector2(-16f, 0f),
                 new Vector2(118f, 38f));
             _applyButton.onClick.AddListener(HandleApplyClicked);
+            ApplyReadOnlyState();
 
             Hide();
         }
@@ -884,6 +928,8 @@ namespace Trpg.UI.Profile
 
         private void HandleApplyClicked()
         {
+            if (_isReadOnly)
+                return;
             StoreCurrentSection();
             QueueCurrentSectionEdit(true);
             Applied?.Invoke();
@@ -897,7 +943,7 @@ namespace Trpg.UI.Profile
 
         private void HandleInputValueChanged(string text)
         {
-            if (_suppressInputCallback)
+            if (_isReadOnly || _suppressInputCallback)
                 return;
 
             StoreCurrentSection();
@@ -906,7 +952,7 @@ namespace Trpg.UI.Profile
 
         private void HandleInputEndEdit(string text)
         {
-            if (_suppressInputCallback)
+            if (_isReadOnly || _suppressInputCallback)
                 return;
 
             StoreCurrentSection();
@@ -974,7 +1020,8 @@ namespace Trpg.UI.Profile
         private void RefreshTitle()
         {
             if (_titleText != null)
-                _titleText.text = $"PLAYER INFORMATION · {_displayName}";
+                _titleText.text =
+                    $"CHARACTER INFORMATION · {_displayName}";
         }
 
         private string GetSectionText(PawnProfileSection section)

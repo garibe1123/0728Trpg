@@ -24,7 +24,6 @@ namespace Trpg.Pawns
         private enum PawnSaveGroup
         {
             Player,
-            Monster,
             Npc
         }
 
@@ -656,25 +655,33 @@ namespace Trpg.Pawns
                 PositionX = position.x,
                 PositionY = position.y,
                 PositionZ = position.z,
-                RotationZ = pawn.transform.eulerAngles.z
+                RotationZ = pawn.transform.eulerAngles.z,
+                IsHidden = pawn.IsHidden,
+                IsDead = pawn.IsDead
             };
 
-            var statState = PlayerStatState.ResolveOrCreate(
-                pawn.gameObject,
-                pawn.Definition);
-            stored.Stats = statState != null
-                ? statState.CreateSnapshot()
-                : null;
+            if (pawn.HasStats)
+            {
+                var statState = PlayerStatState.ResolveOrCreate(
+                    pawn.gameObject,
+                    pawn.Definition);
+                stored.Stats = statState != null
+                    ? statState.CreateSnapshot()
+                    : null;
+            }
 
-            var skillState = ResolveSkillState(pawn);
-            stored.Skills = skillState != null
-                ? skillState.CreateSnapshot()
-                : null;
+            if (pawn.HasFullCharacterSheet)
+            {
+                var skillState = ResolveSkillState(pawn);
+                stored.Skills = skillState != null
+                    ? skillState.CreateSnapshot()
+                    : null;
 
-            var inventoryState = ResolveInventoryState(pawn);
-            stored.Inventory = inventoryState != null
-                ? inventoryState.CreateSnapshot()
-                : null;
+                var inventoryState = ResolveInventoryState(pawn);
+                stored.Inventory = inventoryState != null
+                    ? inventoryState.CreateSnapshot()
+                    : null;
+            }
 
             return stored;
         }
@@ -1082,18 +1089,28 @@ namespace Trpg.Pawns
                 return;
             }
 
+            var supportsStats = pawn.HasStats;
+            var supportsCharacterSheet =
+                pawn.HasFullCharacterSheet;
             var requestedAreaCount = 1;
-            if (stored.Stats != null)
+            if (supportsStats && stored.Stats != null)
                 requestedAreaCount++;
-            if (stored.Skills != null)
+            if (supportsCharacterSheet && stored.Skills != null)
                 requestedAreaCount++;
-            if (stored.Inventory != null)
+            if (supportsCharacterSheet && stored.Inventory != null)
                 requestedAreaCount++;
 
             var restoredAreaCount = 0;
             var pawnHasIssue = false;
 
-            if (stored.Stats != null)
+            requestedAreaCount++;
+            RestorePawnRuntimeState(
+                pawn,
+                stored.IsHidden,
+                stored.IsDead);
+            restoredAreaCount++;
+
+            if (supportsStats && stored.Stats != null)
             {
                 if (TryRestoreStats(
                         pawn,
@@ -1110,7 +1127,7 @@ namespace Trpg.Pawns
                 }
             }
 
-            if (stored.Skills != null)
+            if (supportsCharacterSheet && stored.Skills != null)
             {
                 if (TryRestoreSkills(
                         pawn,
@@ -1127,7 +1144,7 @@ namespace Trpg.Pawns
                 }
             }
 
-            if (stored.Inventory != null)
+            if (supportsCharacterSheet && stored.Inventory != null)
             {
                 if (TryRestoreInventory(
                         pawn,
@@ -1173,6 +1190,30 @@ namespace Trpg.Pawns
             {
                 result.FullyRestoredPawnCount++;
             }
+        }
+
+        private static void RestorePawnRuntimeState(
+            InteractivePawn pawn,
+            bool hidden,
+            bool dead)
+        {
+            if (pawn == null)
+                return;
+
+            var authority = TRPGSessionAuthority.Instance;
+            if (authority != null &&
+                authority.IsOnline &&
+                authority.IsLocalGameMaster)
+            {
+                authority.SetHostPawnRuntimeState(
+                    pawn,
+                    hidden,
+                    dead,
+                    false);
+                return;
+            }
+
+            pawn.SetRuntimeState(hidden, dead);
         }
 
         private static bool TryRestoreStats(
@@ -1708,18 +1749,6 @@ namespace Trpg.Pawns
                 return false;
             }
 
-            if (!TryAddPawnRecords(
-                    _pawnManager.MonsterPawns,
-                    PawnSaveGroup.Monster,
-                    records,
-                    saveKeys,
-                    playerIds,
-                    playerDefinitions,
-                    out error))
-            {
-                return false;
-            }
-
             return TryAddPawnRecords(
                 _pawnManager.NpcPawns,
                 PawnSaveGroup.Npc,
@@ -1824,9 +1853,7 @@ namespace Trpg.Pawns
             if (group == PawnSaveGroup.Player)
                 return "@TRPG:P:" + pawn.InstanceId;
 
-            var prefix = group == PawnSaveGroup.Monster
-                ? "@TRPG:M:"
-                : "@TRPG:N:";
+            const string prefix = "@TRPG:N:";
             var sceneName = pawn.gameObject.scene.name ?? string.Empty;
             return prefix + sceneName + ":" +
                    BuildHierarchySiblingPath(pawn.transform);
@@ -1860,7 +1887,7 @@ namespace Trpg.Pawns
                     "@TRPG:M:",
                     StringComparison.Ordinal))
             {
-                return PawnSaveGroup.Monster;
+                return PawnSaveGroup.Npc;
             }
 
             if (saveKey.StartsWith(
@@ -1905,6 +1932,8 @@ namespace Trpg.Pawns
                    Mathf.Abs(Mathf.DeltaAngle(
                        current.RotationZ,
                        target.RotationZ)) <= 0.01f &&
+                   current.IsHidden == target.IsHidden &&
+                   current.IsDead == target.IsDead &&
                    AreJsonSnapshotsEquivalent(
                        current.Stats,
                        target.Stats) &&
@@ -1934,8 +1963,12 @@ namespace Trpg.Pawns
         private static PlayerSkillState ResolveSkillState(
             InteractivePawn pawn)
         {
-            if (pawn == null || pawn.Definition == null)
+            if (pawn == null ||
+                !pawn.HasFullCharacterSheet ||
+                pawn.Definition == null)
+            {
                 return null;
+            }
 
             return PlayerSkillState.ResolveOrCreate(
                 pawn.gameObject,
@@ -1945,8 +1978,12 @@ namespace Trpg.Pawns
         private static PlayerInventoryState ResolveInventoryState(
             InteractivePawn pawn)
         {
-            if (pawn == null || pawn.Definition == null)
+            if (pawn == null ||
+                !pawn.HasFullCharacterSheet ||
+                pawn.Definition == null)
+            {
                 return null;
+            }
 
             return PlayerInventoryState.ResolveOrCreate(
                 pawn.gameObject,

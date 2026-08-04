@@ -11,10 +11,31 @@ namespace Trpg.Pawns
         Door
     }
 
+    /// <summary>
+    /// 기존 SO 직렬화 호환을 위한 내부 값입니다.
+    /// 1번 값은 이전 비플레이어 Moveable 데이터를 Walkable NPC로 마이그레이션합니다.
+    /// </summary>
     public enum MoveablePawnKind
     {
+        Player = 0,
+        LegacyWalkableNpc = 1
+    }
+
+    public enum NpcMovementMode
+    {
+        Fixed = 0,
+        Walkable = 1
+    }
+
+    /// <summary>
+    /// Inspector와 런타임에서 사용하는 최종 Interactive Pawn 역할입니다.
+    /// 비플레이어 캐릭터는 모두 NPC로 통합합니다.
+    /// </summary>
+    public enum InteractivePawnRole
+    {
         Player,
-        Monster
+        Npc,
+        Door
     }
 
     public enum FieldPawnKind

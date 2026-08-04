@@ -59,8 +59,7 @@ namespace Trpg.Pawns
     public sealed class PawnRollResultWindow : MonoBehaviour
     {
         private const float MinimumDuration = 0.25f;
-        private const float FastTickSeconds = 0.022f;
-        private const float SlowTickSeconds = 0.16f;
+        private const float CounterStepSeconds = 0.035f;
         private const float PointerRotations = 6f;
 
         private RectTransform _rootRect;
@@ -327,7 +326,11 @@ namespace Trpg.Pawns
             var minimum = Mathf.Min(data.MinimumValue, data.MaximumValue);
             var maximum = Mathf.Max(data.MinimumValue, data.MaximumValue);
             var finalValue = Mathf.Clamp(data.FinalValue, minimum, maximum);
-            var duration = Mathf.Max(MinimumDuration, data.DurationSeconds);
+            var counterDistance = Mathf.Abs(finalValue - minimum);
+            var duration = Mathf.Max(
+                MinimumDuration,
+                data.DurationSeconds,
+                counterDistance * CounterStepSeconds);
 
             SetText(_titleText, data.Title);
             SetText(_expressionText, data.Expression);
@@ -341,30 +344,29 @@ namespace Trpg.Pawns
             var finalRatio = (finalValue - minimum) / (float)range;
             var finalAngle = -360f * (PointerRotations + finalRatio);
             var elapsed = 0f;
-            var nextTickAt = 0f;
-            var currentValue = minimum - 1;
+            var currentValue = minimum;
 
             while (elapsed < duration)
             {
                 elapsed += Time.unscaledDeltaTime;
                 var normalized = Mathf.Clamp01(elapsed / duration);
                 var eased = 1f - Mathf.Pow(1f - normalized, 3f);
+                var targetValue = Mathf.RoundToInt(
+                    Mathf.Lerp(
+                        minimum,
+                        finalValue,
+                        normalized));
 
-                if (elapsed >= nextTickAt)
+                if (currentValue != targetValue)
                 {
-                    currentValue++;
-                    if (currentValue > maximum)
-                        currentValue = minimum;
-
+                    currentValue += Math.Sign(
+                        targetValue - currentValue);
                     SetText(_counterText, currentValue.ToString());
                     _counterText.rectTransform.localScale =
                         Vector3.one * 1.08f;
-                    PlayOneShot(_tickClip, 0.34f);
-                    var tickBlend = normalized * normalized;
-                    nextTickAt = elapsed + Mathf.Lerp(
-                        FastTickSeconds,
-                        SlowTickSeconds,
-                        tickBlend);
+                    PlayOneShot(
+                        _tickClip,
+                        Mathf.Lerp(0.34f, 0.52f, normalized));
                 }
 
                 _counterText.rectTransform.localScale = Vector3.Lerp(
@@ -384,6 +386,16 @@ namespace Trpg.Pawns
             }
 
             _pointer.localEulerAngles = new Vector3(0f, 0f, finalAngle);
+            while (currentValue != finalValue)
+            {
+                currentValue += Math.Sign(finalValue - currentValue);
+                SetText(_counterText, currentValue.ToString());
+                _counterText.rectTransform.localScale =
+                    Vector3.one * 1.08f;
+                PlayOneShot(_tickClip, 0.5f);
+                yield return null;
+            }
+
             ApplyFinal(data);
             PlayCompletionSound(data.ResultTone);
             _routine = null;

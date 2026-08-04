@@ -63,15 +63,25 @@ namespace Trpg.Pawns
         [SerializeField, Tooltip("이 Pawn의 상호작용 종류")]
         private InteractivePawnKind _kind = InteractivePawnKind.Npc;
 
-        [SerializeField, Tooltip("Moveable일 때 Player 또는 Monster 구분")]
+        [SerializeField, HideInInspector, Tooltip(
+            "이전 비플레이어 Moveable SO 직렬화 호환용 내부 값")]
         private MoveablePawnKind _moveableKind = MoveablePawnKind.Player;
+
+        [SerializeField, Tooltip("NPC 이동 가능 여부")]
+        private NpcMovementMode _npcMovementMode =
+            NpcMovementMode.Fixed;
 
         [Header("Info Bar")]
         [SerializeField, Tooltip("하단 정보 바에 표시할 이름")]
         private string _displayName;
 
-        [SerializeField, TextArea(2, 5), Tooltip("하단 정보 바에 표시할 설명")]
+        [SerializeField, TextArea(2, 5), Tooltip("하단 정보 바와 공개 인물 설명에 표시할 설명")]
         private string _description;
+
+        [SerializeField, TextArea(4, 12), Tooltip(
+            "GM에게만 표시하는 운용 지침. 예: 이 캐릭터는 ~를 갖고 있으며, " +
+            "특정 조건에서 어떤 결과를 제공합니다.")]
+        private string _gmInstructions;
 
         [SerializeField, Tooltip("하단 정보 바 왼쪽에 표시할 Portrait")]
         private Sprite _portrait;
@@ -140,8 +150,31 @@ namespace Trpg.Pawns
         public string Id => _id;
         public InteractivePawnKind Kind => _kind;
         public MoveablePawnKind MoveableKind => _moveableKind;
+        public NpcMovementMode NpcMovement => ResolveNpcMovementMode(
+            _kind,
+            _moveableKind,
+            _npcMovementMode);
+        public InteractivePawnRole Role => ResolveRole(
+            _kind,
+            _moveableKind);
+        public bool IsPlayer => Role == InteractivePawnRole.Player;
+        public bool IsNpc => Role == InteractivePawnRole.Npc;
+        public bool IsDoor => Role == InteractivePawnRole.Door;
+        public bool SupportsFullCharacterSheet => IsPlayer;
+        public bool SupportsStats => IsPlayer || IsNpc;
+        public bool SupportsSkills => IsPlayer;
+        public bool SupportsInventory => IsPlayer;
+        public bool SupportsProfile => IsPlayer;
+        public bool SupportsRolls => SupportsStats;
+        public bool SupportsCocStatReroll => SupportsStats;
+        public bool ShowsInformationOnly => IsNpc;
+        public bool HasIdentityDetail => !IsDoor;
+        public bool CanMove =>
+            IsPlayer ||
+            (IsNpc && NpcMovement == NpcMovementMode.Walkable);
         public string DisplayName => _displayName;
         public string Description => _description;
+        public string GmInstructions => _gmInstructions;
         public Sprite Portrait => _portrait;
         public StatRuleTemplate StatRuleTemplateAsset => _statRuleTemplate;
         public IStatRuleTemplate EffectiveStatRuleTemplate =>
@@ -158,7 +191,7 @@ namespace Trpg.Pawns
             get
             {
                 _baseStatCache.Clear();
-                if (_baseStats == null)
+                if (!SupportsStats || _baseStats == null)
                     return _baseStatCache;
 
                 for (var index = 0; index < _baseStats.Count; index++)
@@ -183,6 +216,9 @@ namespace Trpg.Pawns
             get
             {
                 var fallback = ResolveFallbackMovementScore();
+                if (!SupportsStats)
+                    return fallback;
+
                 try
                 {
                     var runtime = new StatRuntimeState(this);
@@ -210,6 +246,9 @@ namespace Trpg.Pawns
             out double value)
         {
             value = 0d;
+            if (!SupportsStats)
+                return false;
+
             try
             {
                 var runtime = new StatRuntimeState(this);
@@ -228,6 +267,38 @@ namespace Trpg.Pawns
                 Debug.LogException(exception, this);
                 return false;
             }
+        }
+
+        public static InteractivePawnRole ResolveRole(
+            InteractivePawnKind kind,
+            MoveablePawnKind moveableKind)
+        {
+            if (kind == InteractivePawnKind.Door)
+                return InteractivePawnRole.Door;
+
+            if (kind == InteractivePawnKind.Moveable &&
+                moveableKind == MoveablePawnKind.Player)
+            {
+                return InteractivePawnRole.Player;
+            }
+
+            return InteractivePawnRole.Npc;
+        }
+
+        public static NpcMovementMode ResolveNpcMovementMode(
+            InteractivePawnKind kind,
+            MoveablePawnKind moveableKind,
+            NpcMovementMode npcMovementMode)
+        {
+            if (kind == InteractivePawnKind.Moveable &&
+                moveableKind == MoveablePawnKind.LegacyWalkableNpc)
+            {
+                return NpcMovementMode.Walkable;
+            }
+
+            return kind == InteractivePawnKind.Npc
+                ? npcMovementMode
+                : NpcMovementMode.Fixed;
         }
 
         public int ResolveDexterity(int fallback = 50)
@@ -262,7 +333,8 @@ namespace Trpg.Pawns
                 ? Mathf.Clamp(fallback, 10, 100)
                 : ResolveFallbackMovementScore();
 
-            if (statProvider == null ||
+            if (!SupportsStats ||
+                statProvider == null ||
                 !statProvider.TryGetRoleNumber(
                     StatRole.Movement,
                     out var movement))
@@ -354,6 +426,13 @@ namespace Trpg.Pawns
 #if UNITY_EDITOR
         private void OnValidate()
         {
+            if (_kind == InteractivePawnKind.Moveable &&
+                _moveableKind == MoveablePawnKind.LegacyWalkableNpc)
+            {
+                _kind = InteractivePawnKind.Npc;
+                _npcMovementMode = NpcMovementMode.Walkable;
+            }
+
             var legacyMeters = ResolveLegacyMoveMeters();
             if (legacyMeters > 0f)
             {
@@ -369,6 +448,9 @@ namespace Trpg.Pawns
             {
                 Debug.LogError($"[{name}] Definition Id가 비어 있습니다.", this);
             }
+
+            if (!SupportsStats)
+                return;
 
             if (_baseStats == null)
             {
@@ -396,6 +478,9 @@ namespace Trpg.Pawns
                         this);
                 }
             }
+
+            if (!SupportsSkills)
+                return;
 
             if (_skills == null)
             {

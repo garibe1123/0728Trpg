@@ -451,8 +451,12 @@ namespace Trpg.UI.Skills
             GameObject selectedObject,
             InteractivePawnDefinition definition)
         {
-            if (selectedObject == null || definition == null)
+            if (selectedObject == null ||
+                definition == null ||
+                !definition.SupportsFullCharacterSheet)
+            {
                 return null;
+            }
 
             var state =
                 selectedObject.GetComponent<PlayerSkillState>();

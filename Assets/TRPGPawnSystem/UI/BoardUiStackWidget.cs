@@ -178,6 +178,14 @@ namespace Trpg.Pawns
         private int _bonusPenalty;
         private BoardLeftPane _leftPane = BoardLeftPane.Identity;
         private BoardRightPane _rightPane = BoardRightPane.Stats;
+        private bool _supportsStats;
+        private bool _supportsSkills;
+        private bool _supportsInventory;
+        private bool _supportsProfile;
+        private bool _canRoll;
+        private bool _showMovement;
+        private bool _showGmInstructions;
+        private string _gmInstructions;
 
         public RectTransform RootRect { get; private set; }
         public CanvasGroup RootCanvasGroup { get; private set; }
@@ -210,6 +218,8 @@ namespace Trpg.Pawns
         public PawnCheckSourceData SelectedSource => _selectedSource;
         public PawnCheckDifficulty SelectedDifficulty => _selectedDifficulty;
         public int BonusPenalty => _bonusPenalty;
+        public bool ShowsRightPanel =>
+            _supportsStats || _supportsSkills;
 
         public event Action<BoardLeftPane> LeftPaneRequested;
         public event Action<BoardRightPane> RightPaneRequested;
@@ -296,15 +306,93 @@ namespace Trpg.Pawns
 
         public void BindInfo(PawnInfoBarData data)
         {
+            _supportsStats = data.HasStats;
+            _supportsSkills = data.HasSkills;
+            _supportsInventory = data.HasInventory;
+            _supportsProfile = data.HasProfile;
+            _canRoll = data.CanRoll;
+            _showMovement = data.ShowMovement;
+            _showGmInstructions = data.ShowGmInstructions;
+            _gmInstructions = data.ShowGmInstructions
+                ? data.GmInstructions
+                : string.Empty;
+            ApplyCapabilities();
+
             _portraitImage.sprite = data.Portrait;
             _portraitImage.enabled = data.Portrait != null;
             _nameText.text = string.IsNullOrWhiteSpace(data.DisplayName)
                 ? "캐릭터"
                 : data.DisplayName;
             _jobText.text = string.IsNullOrWhiteSpace(data.Description)
-                ? "직업 정보 없음"
+                ? "인물 설명 없음"
                 : data.Description;
+            _movementText.text = data.ShowMovement
+                ? "이동 정보 갱신 중"
+                : string.Empty;
             RefreshIdentitySummary();
+        }
+
+
+        private void ApplyCapabilities()
+        {
+            if (_identityTab != null)
+            {
+                _identityTab.gameObject.SetActive(true);
+                var identityRect = _identityTab.GetComponent<RectTransform>();
+                if (_supportsInventory || _supportsProfile)
+                {
+                    PlaceThird(_identityTab, 0f, 0.25f);
+                }
+                else if (identityRect != null)
+                {
+                    identityRect.anchorMin = new Vector2(0f, 0f);
+                    identityRect.anchorMax = new Vector2(1f, 1f);
+                    identityRect.offsetMin = Vector2.zero;
+                    identityRect.offsetMax = Vector2.zero;
+                }
+            }
+
+            if (_inventoryTab != null)
+                _inventoryTab.gameObject.SetActive(_supportsInventory);
+            if (_profileTab != null)
+                _profileTab.gameObject.SetActive(_supportsProfile);
+            if (_statsTab != null)
+                _statsTab.gameObject.SetActive(_supportsStats);
+            if (_skillsTab != null)
+                _skillsTab.gameObject.SetActive(_supportsSkills);
+            if (_rightActionBar != null)
+                _rightActionBar.gameObject.SetActive(_canRoll);
+
+            if (_statsTab != null)
+            {
+                if (_supportsStats && !_supportsSkills)
+                {
+                    var rect = _statsTab.GetComponent<RectTransform>();
+                    if (rect != null)
+                    {
+                        rect.anchorMin = new Vector2(0f, 0f);
+                        rect.anchorMax = new Vector2(1f, 1f);
+                        rect.offsetMin = Vector2.zero;
+                        rect.offsetMax = Vector2.zero;
+                    }
+                }
+                else
+                {
+                    PlaceHalf(_statsTab, 0f, 0.5f);
+                }
+            }
+
+            if (_skillsTab != null && _supportsSkills)
+                PlaceHalf(_skillsTab, 0.5f, 1f);
+
+            if (!_supportsInventory && _leftPane == BoardLeftPane.Inventory ||
+                !_supportsProfile && _leftPane == BoardLeftPane.Profile)
+            {
+                SetLeftPane(BoardLeftPane.Identity);
+            }
+
+            if (!_supportsSkills && _rightPane == BoardRightPane.Skills)
+                SetRightPane(BoardRightPane.Stats);
         }
 
         public void ClearInfo()
@@ -315,11 +403,21 @@ namespace Trpg.Pawns
             _jobText.text = string.Empty;
             _movementText.text = string.Empty;
             _identityDetailText.text = string.Empty;
+            _showMovement = false;
+            _showGmInstructions = false;
+            _gmInstructions = string.Empty;
             ClearSource();
         }
 
         public void SetMovement(float remaining, float maximum)
         {
+            if (!_showMovement)
+            {
+                _movementText.text = string.Empty;
+                RefreshIdentitySummary();
+                return;
+            }
+
             _movementText.text = maximum > 0.0001f
                 ? $"이동 {remaining:0.0}m 남음"
                 : "이동 정보 없음";
@@ -328,6 +426,12 @@ namespace Trpg.Pawns
 
         public void SetLeftPane(BoardLeftPane pane)
         {
+            if (pane == BoardLeftPane.Inventory && !_supportsInventory ||
+                pane == BoardLeftPane.Profile && !_supportsProfile)
+            {
+                pane = BoardLeftPane.Identity;
+            }
+
             _leftPane = pane;
             SetHostActive(IdentityHost, pane == BoardLeftPane.Identity);
             SetHostActive(BagHost, pane == BoardLeftPane.Inventory);
@@ -340,6 +444,9 @@ namespace Trpg.Pawns
 
         public void SetRightPane(BoardRightPane pane)
         {
+            if (pane == BoardRightPane.Skills && !_supportsSkills)
+                pane = BoardRightPane.Stats;
+
             _rightPane = pane;
             SetHostActive(StatsHost, pane == BoardRightPane.Stats);
             SetHostActive(SkillsHost, pane == BoardRightPane.Skills);
@@ -350,10 +457,18 @@ namespace Trpg.Pawns
 
         public void SetPanelsImmediate(bool visible)
         {
+            SetPanelsImmediate(visible, ShowsRightPanel);
+        }
+
+        public void SetPanelsImmediate(
+            bool visible,
+            bool showRightPanel)
+        {
             var leftHeight = visible ? LeftPanelHeight : 0f;
-            var rightHeight = visible ? RightPanelHeight : 0f;
+            var rightVisible = visible && showRightPanel;
+            var rightHeight = rightVisible ? RightPanelHeight : 0f;
             LeftMask.gameObject.SetActive(visible);
-            RightMask.gameObject.SetActive(visible);
+            RightMask.gameObject.SetActive(rightVisible);
             LeftMask.sizeDelta = new Vector2(
                 Layout.LeftWidth,
                 leftHeight);
@@ -361,7 +476,7 @@ namespace Trpg.Pawns
                 Layout.RightWidth,
                 rightHeight);
             LeftContentGroup.alpha = visible ? 1f : 0f;
-            RightContentGroup.alpha = visible ? 1f : 0f;
+            RightContentGroup.alpha = rightVisible ? 1f : 0f;
             SetPanelInput(visible);
         }
 
@@ -369,8 +484,10 @@ namespace Trpg.Pawns
         {
             LeftContentGroup.interactable = enabled;
             LeftContentGroup.blocksRaycasts = enabled;
-            RightContentGroup.interactable = enabled;
-            RightContentGroup.blocksRaycasts = enabled;
+            var rightEnabled =
+                enabled && RightMask.gameObject.activeSelf;
+            RightContentGroup.interactable = rightEnabled;
+            RightContentGroup.blocksRaycasts = rightEnabled;
         }
 
         public void ShowDragTarget(PawnCheckSourceData source)
@@ -698,7 +815,7 @@ namespace Trpg.Pawns
                 FontStyle.Bold,
                 TextAnchor.MiddleLeft,
                 TextMain);
-            title.text = "캐릭터 개요";
+            title.text = "인물 설명";
             SetTopStretch(title.rectTransform, 16f, 10f, 34f);
 
             _identityDetailText = CreateText(
@@ -1234,8 +1351,27 @@ namespace Trpg.Pawns
             if (_identityDetailText == null)
                 return;
 
-            _identityDetailText.text =
-                $"{_nameText.text}\n{_jobText.text}\n\n{_movementText.text}";
+            var builder = new System.Text.StringBuilder(512);
+            builder.AppendLine(_nameText.text);
+            builder.AppendLine();
+            builder.AppendLine(_jobText.text);
+
+            if (_showMovement &&
+                !string.IsNullOrWhiteSpace(_movementText.text))
+            {
+                builder.AppendLine();
+                builder.AppendLine(_movementText.text);
+            }
+
+            if (_showGmInstructions &&
+                !string.IsNullOrWhiteSpace(_gmInstructions))
+            {
+                builder.AppendLine();
+                builder.AppendLine("[GM 운용 지침]");
+                builder.Append(_gmInstructions.Trim());
+            }
+
+            _identityDetailText.text = builder.ToString().TrimEnd();
         }
 
         private void SelectDifficulty(PawnCheckDifficulty difficulty)

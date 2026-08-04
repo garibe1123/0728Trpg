@@ -126,7 +126,9 @@ namespace Trpg.Pawns
                 0,
                 0,
                 double.MinValue,
-                double.MaxValue)
+                double.MaxValue,
+                false,
+                string.Empty)
         {
         }
 
@@ -145,6 +147,43 @@ namespace Trpg.Pawns
             double manualModifier,
             double minimumValue,
             double maximumValue)
+            : this(
+                statId,
+                displayName,
+                valueLabel,
+                editableValue,
+                canEdit,
+                showsDifficulty,
+                regular,
+                hard,
+                extreme,
+                baseValue,
+                otherModifier,
+                manualModifier,
+                minimumValue,
+                maximumValue,
+                false,
+                string.Empty)
+        {
+        }
+
+        public PawnStatEntryData(
+            string statId,
+            string displayName,
+            string valueLabel,
+            double editableValue,
+            bool canEdit,
+            bool showsDifficulty,
+            int regular,
+            int hard,
+            int extreme,
+            double baseValue,
+            double otherModifier,
+            double manualModifier,
+            double minimumValue,
+            double maximumValue,
+            bool canReroll,
+            string rerollFormula)
         {
             StatId = statId;
             DisplayName = displayName;
@@ -160,6 +199,8 @@ namespace Trpg.Pawns
             ManualModifier = manualModifier;
             MinimumValue = minimumValue;
             MaximumValue = maximumValue;
+            CanReroll = canReroll;
+            RerollFormula = rerollFormula ?? string.Empty;
         }
 
         public string StatId { get; }
@@ -176,6 +217,8 @@ namespace Trpg.Pawns
         public double ManualModifier { get; }
         public double MinimumValue { get; }
         public double MaximumValue { get; }
+        public bool CanReroll { get; }
+        public string RerollFormula { get; }
 
         public string FormatRegular()
         {
@@ -258,7 +301,37 @@ namespace Trpg.Pawns
             IReadOnlyList<PawnResourceValueData> resources,
             IReadOnlyList<PawnSkillValueData> skills,
             IReadOnlyList<PawnSkillOptionData> availableSkillOptions,
-            bool canAddSkills)
+            bool canAddSkills,
+            bool canRoll = true)
+            : this(
+                displayName,
+                portrait,
+                axes,
+                entries,
+                resources,
+                skills,
+                availableSkillOptions,
+                canAddSkills,
+                canRoll,
+                false,
+                0,
+                CoCStatGenerationRules.MaximumPlayerRerollPoints)
+        {
+        }
+
+        public PawnStatPanelData(
+            string displayName,
+            Sprite portrait,
+            IReadOnlyList<PawnStatAxisData> axes,
+            IReadOnlyList<PawnStatEntryData> entries,
+            IReadOnlyList<PawnResourceValueData> resources,
+            IReadOnlyList<PawnSkillValueData> skills,
+            IReadOnlyList<PawnSkillOptionData> availableSkillOptions,
+            bool canAddSkills,
+            bool canRoll,
+            bool hasUnlimitedRerolls,
+            int rerollPointsRemaining,
+            int rerollPointsMaximum)
         {
             DisplayName = displayName;
             Portrait = portrait;
@@ -268,6 +341,10 @@ namespace Trpg.Pawns
             Skills = skills;
             AvailableSkillOptions = availableSkillOptions;
             CanAddSkills = canAddSkills;
+            CanRoll = canRoll;
+            HasUnlimitedRerolls = hasUnlimitedRerolls;
+            RerollPointsRemaining = Mathf.Max(0, rerollPointsRemaining);
+            RerollPointsMaximum = Mathf.Max(0, rerollPointsMaximum);
         }
 
         public string DisplayName { get; }
@@ -279,6 +356,10 @@ namespace Trpg.Pawns
         public IReadOnlyList<PawnSkillOptionData>
             AvailableSkillOptions { get; }
         public bool CanAddSkills { get; }
+        public bool CanRoll { get; }
+        public bool HasUnlimitedRerolls { get; }
+        public int RerollPointsRemaining { get; }
+        public int RerollPointsMaximum { get; }
     }
 
     public sealed class PawnResourceBarWidget : MonoBehaviour
@@ -740,6 +821,8 @@ namespace Trpg.Pawns
             public Text ExtremeText;
             public InputField RegularInput;
             public PawnRollSourceWidget RollSource;
+            public Button RerollButton;
+            public Text RerollLabel;
             public PawnStatEntryData Data;
         }
 
@@ -771,6 +854,8 @@ namespace Trpg.Pawns
         private Button _skillToggleButton;
         private Image _skillToggleImage;
         private Button _quickCheckButton;
+        private Button _randomCheckButton;
+        private Text _rerollCounterText;
         private Button _closeButton;
         private Image _summaryPortraitImage;
         private Button _summaryPortraitButton;
@@ -798,6 +883,7 @@ namespace Trpg.Pawns
         private float _currentChartHeight;
         private bool _isBound;
         private bool _isExpanded;
+        private bool _canRoll;
         private LayoutFocus _layoutFocus;
         private EntryVisual _editingEntry;
         private bool _hasPendingValueEdit;
@@ -820,6 +906,7 @@ namespace Trpg.Pawns
         private bool _legacyTitleActive;
         private bool _legacyCloseActive;
         private bool _legacyQuickCheckActive;
+        private bool _legacyRandomCheckActive;
         private bool _legacySkillToggleActive;
 
         public event Action<string, double> ValueEditRequested;
@@ -831,6 +918,7 @@ namespace Trpg.Pawns
         public event Action<PawnSkillRemoveRequest>
             SkillRemoveRequested;
         public event Action QuickCheckRequested;
+        public event Action<string> StatRerollRequested;
         public event Action<bool> ExpandedChanged;
         public event Action SummaryClicked;
 
@@ -897,6 +985,7 @@ namespace Trpg.Pawns
         public void Bind(in PawnStatPanelData data)
         {
             _isBound = true;
+            _canRoll = data.CanRoll;
             BindIdentity(data.DisplayName, data.Portrait);
             BindSummary(data.Resources);
             BindAxes(data.Axes);
@@ -905,6 +994,8 @@ namespace Trpg.Pawns
                 data.Skills,
                 data.AvailableSkillOptions,
                 data.CanAddSkills);
+            _skillPanel?.SetRollInteractionEnabled(_canRoll);
+            BindRerollCounter(data);
             if (_summaryPortraitButton != null)
                 _summaryPortraitButton.interactable = true;
             gameObject.SetActive(true);
@@ -938,12 +1029,15 @@ namespace Trpg.Pawns
 
         private void SetRollSourceInteraction(bool enabled)
         {
+            var allowInteraction = enabled && _canRoll;
             for (var index = 0; index < _entries.Count; index++)
             {
                 var source = _entries[index].RollSource;
                 if (source != null)
-                    source.SetInteractionEnabled(enabled);
+                    source.SetInteractionEnabled(allowInteraction);
             }
+
+            _skillPanel?.SetRollInteractionEnabled(allowInteraction);
         }
 
         public void ToggleExpanded()
@@ -956,6 +1050,7 @@ namespace Trpg.Pawns
             FlushPendingEdits();
             _isBound = false;
             _isExpanded = false;
+            _canRoll = false;
             _usedEntryCount = 0;
             KillDrawerTransition();
             KillSummaryHoverTween();
@@ -986,6 +1081,8 @@ namespace Trpg.Pawns
             }
             if (_summaryPortraitButton != null)
                 _summaryPortraitButton.interactable = false;
+            if (_randomCheckButton != null)
+                _randomCheckButton.interactable = false;
 
             gameObject.SetActive(false);
         }
@@ -1050,6 +1147,9 @@ namespace Trpg.Pawns
                     _legacyQuickCheckActive =
                         _quickCheckButton != null &&
                         _quickCheckButton.gameObject.activeSelf;
+                    _legacyRandomCheckActive =
+                        _randomCheckButton != null &&
+                        _randomCheckButton.gameObject.activeSelf;
                     _legacySkillToggleActive =
                         _skillToggleButton != null &&
                         _skillToggleButton.gameObject.activeSelf;
@@ -1122,6 +1222,11 @@ namespace Trpg.Pawns
             {
                 _quickCheckButton.gameObject.SetActive(
                     _legacyQuickCheckActive);
+            }
+            if (_randomCheckButton != null)
+            {
+                _randomCheckButton.gameObject.SetActive(
+                    _legacyRandomCheckActive);
             }
             if (_skillToggleButton != null)
             {
@@ -1386,6 +1491,7 @@ namespace Trpg.Pawns
 
             BuildCloseButton();
             BuildQuickCheckButton();
+            BuildRandomCheckButton();
             BuildSkillToggle();
             BuildChart();
             BuildEntryList();
@@ -1495,6 +1601,66 @@ namespace Trpg.Pawns
             label.rectTransform.anchorMax = Vector2.one;
             label.rectTransform.offsetMin = Vector2.zero;
             label.rectTransform.offsetMax = Vector2.zero;
+        }
+
+        private void BuildRandomCheckButton()
+        {
+            var root = new GameObject(
+                "RerollCounter",
+                typeof(RectTransform),
+                typeof(CanvasRenderer),
+                typeof(Image),
+                typeof(Button));
+            var rect = root.GetComponent<RectTransform>();
+            rect.SetParent(_drawerRect, false);
+            rect.anchorMin = Vector2.one;
+            rect.anchorMax = Vector2.one;
+            rect.pivot = Vector2.one;
+            rect.anchoredPosition = new Vector2(-176f, -8f);
+            rect.sizeDelta = new Vector2(140f, 32f);
+
+            var image = root.GetComponent<Image>();
+            image.color = new Color(0.26f, 0.16f, 0.42f, 0.98f);
+            _randomCheckButton = root.GetComponent<Button>();
+            _randomCheckButton.targetGraphic = image;
+            _randomCheckButton.interactable = false;
+
+            _rerollCounterText = CreateText(
+                "Label",
+                rect,
+                13,
+                TextAnchor.MiddleCenter);
+            _rerollCounterText.text = "재굴림 0 / 5";
+            _rerollCounterText.fontStyle = FontStyle.Bold;
+            _rerollCounterText.rectTransform.anchorMin = Vector2.zero;
+            _rerollCounterText.rectTransform.anchorMax = Vector2.one;
+            _rerollCounterText.rectTransform.offsetMin = Vector2.zero;
+            _rerollCounterText.rectTransform.offsetMax = Vector2.zero;
+        }
+
+        private void BindRerollCounter(in PawnStatPanelData data)
+        {
+            if (_rerollCounterText == null)
+                return;
+
+            if (data.HasUnlimitedRerolls)
+            {
+                _rerollCounterText.text = "재굴림 ∞ · GM";
+                _rerollCounterText.color =
+                    new Color(0.96f, 0.86f, 1f, 1f);
+                return;
+            }
+
+            var maximum = Mathf.Max(0, data.RerollPointsMaximum);
+            var remaining = Mathf.Clamp(
+                data.RerollPointsRemaining,
+                0,
+                maximum);
+            _rerollCounterText.text =
+                $"재굴림 {remaining} / {maximum}";
+            _rerollCounterText.color = remaining > 0
+                ? new Color(0.90f, 0.78f, 1f, 1f)
+                : new Color(0.68f, 0.48f, 0.50f, 1f);
         }
 
         private void BuildSkillToggle()
@@ -1752,30 +1918,38 @@ namespace Trpg.Pawns
                 _entryHeaderRect,
                 "스탯",
                 0f,
-                0.36f,
+                0.31f,
                 TextAnchor.MiddleLeft,
                 true);
             CreateEntryColumnText(
                 "Regular",
                 _entryHeaderRect,
                 "보통",
-                0.36f,
-                0.57f,
+                0.31f,
+                0.47f,
                 TextAnchor.MiddleCenter,
                 true);
             CreateEntryColumnText(
                 "Hard",
                 _entryHeaderRect,
                 "어려움",
-                0.57f,
-                0.78f,
+                0.47f,
+                0.63f,
                 TextAnchor.MiddleCenter,
                 true);
             CreateEntryColumnText(
                 "Extreme",
                 _entryHeaderRect,
                 "극단",
-                0.78f,
+                0.63f,
+                0.79f,
+                TextAnchor.MiddleCenter,
+                true);
+            CreateEntryColumnText(
+                "Reroll",
+                _entryHeaderRect,
+                "재굴림",
+                0.79f,
                 1f,
                 TextAnchor.MiddleCenter,
                 true);
@@ -1951,34 +2125,37 @@ namespace Trpg.Pawns
                 root.transform,
                 string.Empty,
                 0f,
-                0.36f,
+                0.31f,
                 TextAnchor.MiddleLeft,
                 false);
             var regularText = CreateEntryColumnText(
                 "Regular",
                 root.transform,
                 string.Empty,
-                0.36f,
-                0.57f,
+                0.31f,
+                0.47f,
                 TextAnchor.MiddleCenter,
                 false);
             var hardText = CreateEntryColumnText(
                 "Hard",
                 root.transform,
                 string.Empty,
-                0.57f,
-                0.78f,
+                0.47f,
+                0.63f,
                 TextAnchor.MiddleCenter,
                 false);
             var extremeText = CreateEntryColumnText(
                 "Extreme",
                 root.transform,
                 string.Empty,
-                0.78f,
-                1f,
+                0.63f,
+                0.79f,
                 TextAnchor.MiddleCenter,
                 false);
             var regularInput = CreateInlineStatInput(root.transform);
+            var rerollButton = CreateStatRerollButton(
+                root.transform,
+                out var rerollLabel);
             var rollSource = root.AddComponent<PawnRollSourceWidget>();
             PawnRollSourceWidget.ForwardInputDragEvents(
                 regularInput.gameObject,
@@ -1993,7 +2170,9 @@ namespace Trpg.Pawns
                 HardText = hardText,
                 ExtremeText = extremeText,
                 RegularInput = regularInput,
-                RollSource = rollSource
+                RollSource = rollSource,
+                RerollButton = rerollButton,
+                RerollLabel = rerollLabel
             };
         }
 
@@ -2007,8 +2186,8 @@ namespace Trpg.Pawns
                 typeof(InputField));
             root.transform.SetParent(parent, false);
             var rect = root.GetComponent<RectTransform>();
-            rect.anchorMin = new Vector2(0.36f, 0f);
-            rect.anchorMax = new Vector2(0.57f, 1f);
+            rect.anchorMin = new Vector2(0.31f, 0f);
+            rect.anchorMax = new Vector2(0.47f, 1f);
             rect.offsetMin = new Vector2(3f, 4f);
             rect.offsetMax = new Vector2(-3f, -4f);
 
@@ -2035,6 +2214,56 @@ namespace Trpg.Pawns
             input.lineType = InputField.LineType.SingleLine;
             root.SetActive(false);
             return input;
+        }
+
+        private Button CreateStatRerollButton(
+            Transform parent,
+            out Text label)
+        {
+            var root = new GameObject(
+                "StatRerollButton",
+                typeof(RectTransform),
+                typeof(CanvasRenderer),
+                typeof(Image),
+                typeof(Button));
+            root.transform.SetParent(parent, false);
+            var rect = root.GetComponent<RectTransform>();
+            rect.anchorMin = new Vector2(0.80f, 0f);
+            rect.anchorMax = new Vector2(0.99f, 1f);
+            rect.offsetMin = new Vector2(2f, 4f);
+            rect.offsetMax = new Vector2(-2f, -4f);
+
+            var image = root.GetComponent<Image>();
+            image.color = new Color(0.28f, 0.16f, 0.43f, 0.98f);
+
+            var button = root.GetComponent<Button>();
+            button.targetGraphic = image;
+            var colors = button.colors;
+            colors.normalColor = Color.white;
+            colors.highlightedColor =
+                new Color(0.92f, 0.80f, 1f, 1f);
+            colors.pressedColor =
+                new Color(0.66f, 0.48f, 0.84f, 1f);
+            colors.disabledColor =
+                new Color(0.36f, 0.34f, 0.38f, 0.58f);
+            colors.selectedColor = colors.highlightedColor;
+            button.colors = colors;
+
+            label = CreateText(
+                "Label",
+                rect,
+                10,
+                TextAnchor.MiddleCenter);
+            label.fontStyle = FontStyle.Bold;
+            label.resizeTextForBestFit = true;
+            label.resizeTextMinSize = 7;
+            label.resizeTextMaxSize = 10;
+            label.rectTransform.anchorMin = Vector2.zero;
+            label.rectTransform.anchorMax = Vector2.one;
+            label.rectTransform.offsetMin = new Vector2(2f, 1f);
+            label.rectTransform.offsetMax = new Vector2(-2f, -1f);
+            root.SetActive(false);
+            return button;
         }
 
         private Text CreateEntryColumnText(
@@ -2107,6 +2336,31 @@ namespace Trpg.Pawns
                     () => BeginInlineEdit(visual));
             }
 
+            if (visual.RerollButton != null)
+            {
+                visual.RerollButton.onClick.RemoveAllListeners();
+                var showsReroll =
+                    !string.IsNullOrWhiteSpace(data.RerollFormula);
+                visual.RerollButton.gameObject.SetActive(showsReroll);
+                visual.RerollButton.interactable =
+                    showsReroll && data.CanReroll;
+                if (visual.RerollLabel != null)
+                {
+                    visual.RerollLabel.text = showsReroll
+                        ? data.RerollFormula
+                        : string.Empty;
+                    visual.RerollLabel.color = data.CanReroll
+                        ? new Color(0.96f, 0.90f, 1f, 1f)
+                        : new Color(0.68f, 0.62f, 0.70f, 0.78f);
+                }
+
+                if (showsReroll && data.CanReroll)
+                {
+                    visual.RerollButton.onClick.AddListener(
+                        () => HandleStatRerollClicked(visual));
+                }
+            }
+
             var canRoll =
                 data.ShowsDifficulty &&
                 data.Regular >= PawnCheckRollRules.MinimumTarget &&
@@ -2122,7 +2376,8 @@ namespace Trpg.Pawns
                     data.Hard,
                     data.Extreme);
                 visual.RollSource.Bind(source);
-                visual.RollSource.SetInteractionEnabled(_isEmbedded);
+                visual.RollSource.SetInteractionEnabled(
+                    _isEmbedded && _canRoll);
             }
             else
             {
@@ -2410,6 +2665,22 @@ namespace Trpg.Pawns
 
             SetExpanded(false);
             QuickCheckRequested?.Invoke();
+        }
+
+        private void HandleStatRerollClicked(
+            EntryVisual visual)
+        {
+            if (!_isBound ||
+                visual == null ||
+                !visual.Data.CanReroll ||
+                string.IsNullOrWhiteSpace(visual.Data.StatId))
+            {
+                return;
+            }
+
+            FlushPendingEdits();
+            CancelInlineEdit();
+            StatRerollRequested?.Invoke(visual.Data.StatId);
         }
 
         private void HandleSkillAddRequested(
@@ -2974,6 +3245,7 @@ namespace Trpg.Pawns
             SkillRegularEditRequested = null;
             SkillRemoveRequested = null;
             QuickCheckRequested = null;
+            StatRerollRequested = null;
             ExpandedChanged = null;
             SummaryClicked = null;
         }

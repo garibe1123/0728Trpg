@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Trpg.Domain.Stats;
+using Trpg.Pawns;
 using UnityEngine;
 
 namespace Trpg.Data.Stats
@@ -262,6 +263,13 @@ namespace Trpg.Data.Stats
                 Base("coc.pow", "정신력 POW", 70, 50),
                 Base("coc.edu", "교육 EDU", 80, 50),
                 Base("coc.luck", "운 LUCK", 90, 50),
+                Counter(
+                    CoCStatGenerationRules.RerollPointsStatId,
+                    "재굴림 포인트",
+                    95,
+                    CoCStatGenerationRules.DefaultPlayerRerollPoints,
+                    0,
+                    CoCStatGenerationRules.MaximumPlayerRerollPoints),
                 Base("coc.cthulhu_mythos", "크툴루 신화", 100, 0, 0, 99),
 
                 Formula(
@@ -429,6 +437,33 @@ namespace Trpg.Data.Stats
                 defaultValue,
                 min,
                 max);
+        }
+
+        private static StatDefinitionRecord Counter(
+            string id,
+            string displayName,
+            int order,
+            float defaultValue,
+            float min,
+            float max)
+        {
+            return new StatDefinitionRecord(
+                id,
+                displayName,
+                "캐릭터 생성",
+                StatValueSource.Runtime,
+                order,
+                defaultValue,
+                min,
+                max,
+                initialValueFormula:
+                    defaultValue.ToString(
+                        System.Globalization.CultureInfo.InvariantCulture),
+                displayKind: StatDisplayKind.Number,
+                isAdjustable: false,
+                adjustStep: 1f,
+                showInSummary: false,
+                visibility: StatVisibility.Self);
         }
 
         private static StatDefinitionRecord Formula(

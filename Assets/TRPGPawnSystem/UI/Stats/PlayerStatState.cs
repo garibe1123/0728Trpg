@@ -133,9 +133,13 @@ namespace Trpg.UI.Stats
             }
 
             var pawn = ResolveInteractivePawn(selectedObject);
-            var state = pawn != null && pawn.Definition != null
+            var state = pawn != null &&
+                        pawn.Definition != null &&
+                        pawn.HasStats
                 ? ResolveOrCreate(pawn.gameObject, pawn.Definition)
-                : ResolveForPawn(selectedObject);
+                : pawn == null
+                    ? ResolveForPawn(selectedObject)
+                    : null;
 
             if (state == null)
             {
@@ -196,8 +200,12 @@ namespace Trpg.UI.Stats
             GameObject selectedObject,
             InteractivePawnDefinition definition)
         {
-            if (selectedObject == null || definition == null)
+            if (selectedObject == null ||
+                definition == null ||
+                !definition.SupportsStats)
+            {
                 return null;
+            }
 
             var pawn = ResolveInteractivePawn(selectedObject);
             var root = pawn != null
@@ -241,6 +249,12 @@ namespace Trpg.UI.Stats
             if (definition == null)
             {
                 error = "InteractivePawnDefinition이 연결되지 않았습니다.";
+                return false;
+            }
+
+            if (!definition.SupportsStats)
+            {
+                error = "Player 또는 NPC Pawn만 스탯 Snapshot을 사용할 수 있습니다.";
                 return false;
             }
 

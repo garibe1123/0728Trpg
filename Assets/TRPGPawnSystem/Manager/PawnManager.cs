@@ -15,7 +15,6 @@ namespace Trpg.Pawns
         public enum TurnGroup
         {
             Player,
-            Monster,
             Npc
         }
 
@@ -73,11 +72,6 @@ namespace Trpg.Pawns
         [SerializeField, Tooltip(
             "MoveablePawnKind.Player로 자동 분류된 Pawn")]
         private List<InteractivePawn> _playerPawns =
-            new List<InteractivePawn>();
-
-        [SerializeField, Tooltip(
-            "MoveablePawnKind.Monster로 자동 분류된 Pawn")]
-        private List<InteractivePawn> _monsterPawns =
             new List<InteractivePawn>();
 
         [SerializeField, Tooltip(
@@ -149,8 +143,6 @@ namespace Trpg.Pawns
         public Camera BoardCamera => _boardCamera;
         public IReadOnlyList<InteractivePawn> PlayerPawns =>
             _playerPawns;
-        public IReadOnlyList<InteractivePawn> MonsterPawns =>
-            _monsterPawns;
         public IReadOnlyList<InteractivePawn> NpcPawns => _npcPawns;
         public IReadOnlyList<InteractivePawn> InteractivePawns =>
             _interactivePawns;
@@ -292,8 +284,6 @@ namespace Trpg.Pawns
             {
                 case TurnGroup.Player:
                     return _playerPawns;
-                case TurnGroup.Monster:
-                    return _monsterPawns;
                 case TurnGroup.Npc:
                     return _npcPawns;
                 default:
@@ -425,6 +415,17 @@ namespace Trpg.Pawns
                 _ownedTurnCanvas = null;
             }
 
+            for (var index = 0;
+                 index < _interactivePawns.Count;
+                 index++)
+            {
+                if (_interactivePawns[index] != null)
+                {
+                    _interactivePawns[index].RuntimeStateChanged -=
+                        HandlePawnRuntimeStateChanged;
+                }
+            }
+
             InteractiveSelectionChanged = null;
             InteractionRequested = null;
             TurnGroupChanged = null;
@@ -503,6 +504,42 @@ namespace Trpg.Pawns
         private void HandleNextTurnClicked()
         {
             AdvanceTurn();
+        }
+
+        private void HandlePawnRuntimeStateChanged(
+            InteractivePawn pawn)
+        {
+            if (pawn == null)
+                return;
+
+            pawn.RefreshRuntimePresentation();
+            if (_selectedInteractive == pawn)
+            {
+                if (!pawn.IsSelectableForLocalViewer)
+                {
+                    ClearSelection();
+                    return;
+                }
+
+                if (pawn.IsDead)
+                    SetMovementMode(false);
+
+                ApplySelectionPresentation(
+                    pawn,
+                    _activeMaterial,
+                    true);
+                InteractiveSelectionChanged?.Invoke(pawn);
+            }
+            else
+            {
+                ApplySelectionPresentation(
+                    pawn,
+                    _defaultMaterial,
+                    false);
+            }
+
+            RefreshTurnButtonState();
+            PublishTurnGroupChanged();
         }
 
         private void HandlePawnMoved(
@@ -640,7 +677,8 @@ namespace Trpg.Pawns
                     continue;
                 }
 
-                if (pawn is InteractivePawn interactive)
+                if (pawn is InteractivePawn interactive &&
+                    interactive.IsSelectableForLocalViewer)
                 {
                     return interactive;
                 }
@@ -723,6 +761,12 @@ namespace Trpg.Pawns
         public void SelectInteractive(InteractivePawn pawn)
         {
             if (pawn == null)
+            {
+                ClearSelection();
+                return;
+            }
+
+            if (!pawn.IsSelectableForLocalViewer)
             {
                 ClearSelection();
                 return;
@@ -837,11 +881,21 @@ namespace Trpg.Pawns
         private void IndexPawns(bool logValidation)
         {
             EnsurePawnGroupLists();
+            for (var index = 0;
+                 index < _interactivePawns.Count;
+                 index++)
+            {
+                if (_interactivePawns[index] != null)
+                {
+                    _interactivePawns[index].RuntimeStateChanged -=
+                        HandlePawnRuntimeStateChanged;
+                }
+            }
+
             _pawns.Clear();
             _interactivePawns.Clear();
             _interactiveRenderers.Clear();
             _playerPawns.Clear();
-            _monsterPawns.Clear();
             _npcPawns.Clear();
 
             var root = _pawnRoot != null ? _pawnRoot : transform;
@@ -874,6 +928,10 @@ namespace Trpg.Pawns
                 if (pawn is InteractivePawn interactive)
                 {
                     _interactivePawns.Add(interactive);
+                    interactive.RuntimeStateChanged -=
+                        HandlePawnRuntimeStateChanged;
+                    interactive.RuntimeStateChanged +=
+                        HandlePawnRuntimeStateChanged;
                     ClassifyTurnPawn(interactive, logValidation);
                     CacheInteractiveRenderers(
                         interactive,
@@ -887,11 +945,6 @@ namespace Trpg.Pawns
             if (_playerPawns == null)
             {
                 _playerPawns = new List<InteractivePawn>();
-            }
-
-            if (_monsterPawns == null)
-            {
-                _monsterPawns = new List<InteractivePawn>();
             }
 
             if (_npcPawns == null)
@@ -918,24 +971,14 @@ namespace Trpg.Pawns
                 return;
             }
 
-            if (definition.Kind == InteractivePawnKind.Npc)
+            switch (definition.Role)
             {
-                _npcPawns.Add(pawn);
-                return;
-            }
-
-            if (definition.Kind != InteractivePawnKind.Moveable)
-            {
-                return;
-            }
-
-            if (definition.MoveableKind == MoveablePawnKind.Player)
-            {
-                _playerPawns.Add(pawn);
-            }
-            else
-            {
-                _monsterPawns.Add(pawn);
+                case InteractivePawnRole.Player:
+                    _playerPawns.Add(pawn);
+                    break;
+                case InteractivePawnRole.Npc:
+                    _npcPawns.Add(pawn);
+                    break;
             }
         }
 
@@ -1027,7 +1070,7 @@ namespace Trpg.Pawns
 
         private bool TryFindFirstTurnGroup(out TurnGroup group)
         {
-            for (var index = 0; index < 3; index++)
+            for (var index = 0; index < 2; index++)
             {
                 var candidate = (TurnGroup)index;
                 if (GetTurnGroupPawns(candidate).Count > 0)
@@ -1047,10 +1090,10 @@ namespace Trpg.Pawns
         {
             var currentIndex = (int)current;
 
-            for (var offset = 1; offset <= 3; offset++)
+            for (var offset = 1; offset <= 2; offset++)
             {
                 var candidate =
-                    (TurnGroup)((currentIndex + offset) % 3);
+                    (TurnGroup)((currentIndex + offset) % 2);
                 if (GetTurnGroupPawns(candidate).Count > 0)
                 {
                     group = candidate;

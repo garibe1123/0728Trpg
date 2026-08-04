@@ -24,21 +24,70 @@ namespace Trpg.Pawns
         [SerializeField, Tooltip("Door 겹침을 감지할 Trigger Collider2D")]
         private Collider2D _doorTrigger;
 
+        [Header("Runtime State")]
+        [SerializeField, HideInInspector]
+        private bool _isHidden;
+
+        [SerializeField, HideInInspector]
+        private bool _isDead;
+
+        private static readonly int HiddenAmountId =
+            Shader.PropertyToID("_TRPGHiddenAmount");
+        private static readonly int DeadAmountId =
+            Shader.PropertyToID("_TRPGDeadAmount");
+
         private Sequence _movementTween;
         private Vector3 _visualRestLocalPosition;
         private bool _hasVisualRestPosition;
         private Transform _movementTarget;
         private Quaternion _movementStartLocalRotation;
         private Vector3 _movementCameraWorldPosition;
+        private SpriteRenderer[] _runtimeRenderers;
+        private Collider2D[] _runtimeColliders;
+        private bool[] _runtimeColliderDefaults;
+        private MaterialPropertyBlock _runtimePropertyBlock;
 
         public event Action<InteractivePawn> MovementPresentationCompleted;
         public event Action<InteractivePawn, InteractivePawn> DoorEntered;
+        public event Action<InteractivePawn> RuntimeStateChanged;
 
         public InteractivePawnDefinition Definition => _definition;
         public InteractivePawnKind Kind =>
             _definition != null ? _definition.Kind : InteractivePawnKind.Npc;
-        public bool IsMoveable => Kind == InteractivePawnKind.Moveable;
-        public bool IsDoor => Kind == InteractivePawnKind.Door;
+        public InteractivePawnRole Role =>
+            _definition != null
+                ? _definition.Role
+                : InteractivePawnRole.Npc;
+        public bool IsPlayer => Role == InteractivePawnRole.Player;
+        public bool IsNpc => Role == InteractivePawnRole.Npc;
+        public bool IsMoveable =>
+            _definition != null &&
+            _definition.CanMove &&
+            !_isDead;
+        public bool HasFullCharacterSheet =>
+            _definition != null &&
+            _definition.SupportsFullCharacterSheet;
+        public bool HasStats =>
+            _definition != null && _definition.SupportsStats;
+        public bool HasSkills =>
+            _definition != null && _definition.SupportsSkills;
+        public bool HasInventory =>
+            _definition != null && _definition.SupportsInventory;
+        public bool HasProfile =>
+            _definition != null && _definition.SupportsProfile;
+        public bool CanRoll =>
+            _definition != null && _definition.SupportsRolls;
+        public bool CanRerollStats =>
+            _definition != null &&
+            _definition.SupportsCocStatReroll;
+        public bool ShowsInformationOnly =>
+            _definition != null &&
+            _definition.ShowsInformationOnly;
+        public bool IsDoor => Role == InteractivePawnRole.Door;
+        public bool IsHidden => _isHidden;
+        public bool IsDead => _isDead;
+        public bool IsSelectableForLocalViewer =>
+            !_isHidden || IsLocalGameMasterOrOffline();
         public string LinkedDoorInstanceId => _linkedDoorInstanceId;
         public Vector2 ArrivalPosition =>
             _arrivalPoint != null ? _arrivalPoint.position : transform.position;
@@ -50,8 +99,10 @@ namespace Trpg.Pawns
         public override void Bind()
         {
             EnsureCollider();
+            CacheRuntimeTargets();
             CaptureVisualRestPosition();
             base.Bind();
+            RefreshRuntimePresentation();
         }
 
         public override void Unbind()
@@ -65,10 +116,126 @@ namespace Trpg.Pawns
 
         public void SetSelected(bool selected)
         {
+            selected &= IsSelectableForLocalViewer;
             var scale = selected && _definition != null
                 ? _definition.SelectedScale
                 : 1f;
             transform.localScale = Vector3.one * scale;
+        }
+
+
+        public void SetRuntimeState(
+            bool hidden,
+            bool dead,
+            bool notify = true)
+        {
+            var changed = _isHidden != hidden || _isDead != dead;
+            _isHidden = hidden;
+            _isDead = dead;
+
+            if (_isDead)
+                KillMovementTween();
+
+            RefreshRuntimePresentation();
+            if (changed && notify)
+                RuntimeStateChanged?.Invoke(this);
+        }
+
+        public void RefreshRuntimePresentation()
+        {
+            CacheRuntimeTargets();
+            var localGameMaster = IsLocalGameMasterOrOffline();
+            var hiddenFromViewer = _isHidden && !localGameMaster;
+            var hiddenShaderAmount = !_isHidden
+                ? 0f
+                : localGameMaster
+                    ? 0.65f
+                    : 1f;
+            var deadShaderAmount = _isDead ? 1f : 0f;
+
+            if (_runtimePropertyBlock == null)
+                _runtimePropertyBlock = new MaterialPropertyBlock();
+
+            if (_runtimeRenderers != null)
+            {
+                for (var index = 0;
+                     index < _runtimeRenderers.Length;
+                     index++)
+                {
+                    var renderer = _runtimeRenderers[index];
+                    if (renderer == null)
+                        continue;
+
+                    renderer.forceRenderingOff = hiddenFromViewer;
+                    renderer.GetPropertyBlock(_runtimePropertyBlock);
+                    _runtimePropertyBlock.SetFloat(
+                        HiddenAmountId,
+                        hiddenShaderAmount);
+                    _runtimePropertyBlock.SetFloat(
+                        DeadAmountId,
+                        deadShaderAmount);
+                    renderer.SetPropertyBlock(_runtimePropertyBlock);
+                }
+            }
+
+            if (_runtimeColliders != null)
+            {
+                for (var index = 0;
+                     index < _runtimeColliders.Length;
+                     index++)
+                {
+                    var collider = _runtimeColliders[index];
+                    if (collider == null)
+                        continue;
+
+                    var defaultEnabled =
+                        _runtimeColliderDefaults != null &&
+                        index < _runtimeColliderDefaults.Length
+                            ? _runtimeColliderDefaults[index]
+                            : true;
+                    collider.enabled =
+                        defaultEnabled && !hiddenFromViewer;
+                }
+            }
+        }
+
+        private void CacheRuntimeTargets()
+        {
+            if (_runtimeRenderers == null ||
+                _runtimeRenderers.Length == 0)
+            {
+                _runtimeRenderers =
+                    GetComponentsInChildren<SpriteRenderer>(true);
+            }
+
+            if (_runtimeColliders != null &&
+                _runtimeColliderDefaults != null &&
+                _runtimeColliders.Length ==
+                _runtimeColliderDefaults.Length)
+            {
+                return;
+            }
+
+            _runtimeColliders =
+                GetComponentsInChildren<Collider2D>(true);
+            _runtimeColliderDefaults =
+                new bool[_runtimeColliders.Length];
+            for (var index = 0;
+                 index < _runtimeColliders.Length;
+                 index++)
+            {
+                _runtimeColliderDefaults[index] =
+                    _runtimeColliders[index] != null &&
+                    _runtimeColliders[index].enabled;
+            }
+        }
+
+        private static bool IsLocalGameMasterOrOffline()
+        {
+            var authority = TRPGSessionAuthority.Instance;
+            return authority == null ||
+                   !authority.IsOnline ||
+                   authority.IsLocalGameMaster;
         }
 
         public void PresentMovement(IReadOnlyList<Vector3> corners)
@@ -152,6 +319,8 @@ namespace Trpg.Pawns
         private void Awake()
         {
             EnsureCollider();
+            CacheRuntimeTargets();
+            RefreshRuntimePresentation();
         }
 
         private void Reset()
@@ -329,6 +498,13 @@ namespace Trpg.Pawns
                 (progress - landingProgress) /
                 (1f - landingProgress);
             return Mathf.Sin(settle * Mathf.PI) * 0.08f;
+        }
+
+        private void OnDestroy()
+        {
+            RuntimeStateChanged = null;
+            MovementPresentationCompleted = null;
+            DoorEntered = null;
         }
 
 #if UNITY_EDITOR

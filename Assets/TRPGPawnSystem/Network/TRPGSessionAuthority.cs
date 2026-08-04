@@ -536,6 +536,7 @@ namespace Trpg.Pawns
             if (!ShouldRouteClientMove ||
                 !IsGameplayReady ||
                 pawn == null ||
+                !pawn.IsMoveable ||
                 pawn.Definition == null)
             {
                 PublishLocalMessage(
@@ -602,6 +603,7 @@ namespace Trpg.Pawns
             if (!IsLocalGameMaster ||
                 _applyingRemoteState ||
                 pawn == null ||
+                !pawn.HasStats ||
                 pawn.Definition == null ||
                 string.IsNullOrWhiteSpace(statId))
             {
@@ -633,22 +635,31 @@ namespace Trpg.Pawns
 
         public bool CanLocalMovePawn(InteractivePawn pawn)
         {
-            return CanLocalActOnPawn(pawn);
+            return pawn != null &&
+                   pawn.IsMoveable &&
+                   CanLocalActOnPawn(pawn);
         }
 
         public bool CanLocalRollPawn(InteractivePawn pawn)
         {
-            return CanLocalActOnPawn(pawn);
+            return pawn != null &&
+                   pawn.HasStats &&
+                   !pawn.IsDead &&
+                   CanLocalActOnPawn(pawn);
         }
 
         public bool CanLocalViewFullCharacter(
             InteractivePawn pawn)
         {
+            if (pawn == null ||
+                pawn.Definition == null ||
+                !pawn.HasFullCharacterSheet)
+            {
+                return false;
+            }
+
             if (!IsOnline || IsLocalGameMaster)
                 return true;
-
-            if (pawn == null || pawn.Definition == null)
-                return false;
 
             return string.Equals(
                 GetLocalControlledDefinitionId(),
@@ -1658,24 +1669,29 @@ namespace Trpg.Pawns
                 if (pawn == null || pawn.Definition == null)
                     continue;
 
-                _movementManager.TryGetMovementPosition(
-                    pawn,
-                    out var position);
-                _movementManager.TryGetMovementBudget(
-                    pawn,
-                    out var remaining,
-                    out var maximum);
-
-                var movePacket = new TRPGNetworkMovePacket
+                if (pawn.Definition != null &&
+                    pawn.Definition.CanMove)
                 {
-                    PawnDefinitionId = NormalizeId(
-                        pawn.Definition.Id),
-                    Destination = position,
-                    RemainingMeters = remaining,
-                    MaximumMeters = maximum,
-                    Mode = 2
-                };
-                RPC_ApplyMoveSnapshot(target, movePacket);
+                    _movementManager.TryGetMovementPosition(
+                        pawn,
+                        out var position);
+                    _movementManager.TryGetMovementBudget(
+                        pawn,
+                        out var remaining,
+                        out var maximum);
+
+                    var movePacket = new TRPGNetworkMovePacket
+                    {
+                        PawnDefinitionId = NormalizeId(
+                            pawn.Definition.Id),
+                        Destination = position,
+                        RemainingMeters = remaining,
+                        MaximumMeters = maximum,
+                        Mode = 2
+                    };
+                    RPC_ApplyMoveSnapshot(target, movePacket);
+                }
+
                 SendStatSnapshotTo(target, pawn);
                 SendInventorySnapshotTo(target, pawn);
                 SendProfileSnapshotTo(target, pawn);
@@ -1686,6 +1702,13 @@ namespace Trpg.Pawns
             PlayerRef target,
             InteractivePawn pawn)
         {
+            if (pawn == null)
+                return;
+
+            SendPawnRuntimeStateSnapshotTo(target, pawn);
+            if (!pawn.HasStats)
+                return;
+
             var state = ResolveStatState(pawn);
             var runtime = state?.Runtime;
             var stats = runtime?.Template?.Stats;
@@ -1810,6 +1833,9 @@ namespace Trpg.Pawns
             {
                 return false;
             }
+
+            if (TryApplyPawnRuntimeStatePacket(packet, pawn))
+                return true;
 
             var state = ResolveStatState(pawn);
             if (state == null)
@@ -2090,8 +2116,12 @@ namespace Trpg.Pawns
         private static PlayerStatState ResolveStatState(
             InteractivePawn pawn)
         {
-            if (pawn == null || pawn.Definition == null)
+            if (pawn == null ||
+                !pawn.HasStats ||
+                pawn.Definition == null)
+            {
                 return null;
+            }
 
             return PlayerStatState.ResolveOrCreate(
                 pawn.gameObject,
@@ -2694,7 +2724,23 @@ namespace Trpg.Pawns
 
             var normalized = expression
                 .Replace(" ", string.Empty)
+                .Replace("×", "*")
+                .Replace("(", string.Empty)
+                .Replace(")", string.Empty)
                 .ToLowerInvariant();
+
+            var multiplier = 1;
+            var multiplyIndex = normalized.LastIndexOf('*');
+            if (multiplyIndex > 0 &&
+                multiplyIndex < normalized.Length - 1 &&
+                int.TryParse(
+                    normalized.Substring(multiplyIndex + 1),
+                    out var parsedMultiplier))
+            {
+                multiplier = Mathf.Max(1, parsedMultiplier);
+                normalized = normalized.Substring(0, multiplyIndex);
+            }
+
             var dIndex = normalized.IndexOf('d');
             if (dIndex <= 0 ||
                 dIndex >= normalized.Length - 1)
@@ -2740,8 +2786,14 @@ namespace Trpg.Pawns
 
             count = Mathf.Max(1, count);
             sides = Mathf.Max(2, sides);
-            minimum = count + modifier;
-            maximum = count * sides + modifier;
+            minimum = (count + modifier) * multiplier;
+            maximum = (count * sides + modifier) * multiplier;
+            if (minimum > maximum)
+            {
+                var swap = minimum;
+                minimum = maximum;
+                maximum = swap;
+            }
             if (minimum == maximum)
                 maximum = minimum + 1;
         }

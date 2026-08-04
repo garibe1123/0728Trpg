@@ -34,6 +34,8 @@ namespace Trpg.Save
         public float PositionY;
         public float PositionZ;
         public float RotationZ;
+        public bool IsHidden;
+        public bool IsDead;
         public StatRuntimeSnapshot Stats;
         public SkillRuntimeSnapshot Skills;
         public InventoryRuntimeSnapshot Inventory;

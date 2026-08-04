@@ -619,11 +619,13 @@ namespace Trpg.Pawns
             request.Accept();
         }
 
+#pragma warning disable CS0618
         public void OnUserSimulationMessage(
             NetworkRunner runner,
             SimulationMessagePtr message)
         {
         }
+#pragma warning restore CS0618
 
         public void OnSessionListUpdated(
             NetworkRunner runner,

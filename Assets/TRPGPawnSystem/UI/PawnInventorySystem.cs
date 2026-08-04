@@ -728,8 +728,12 @@ namespace Trpg.UI.Inventory
             InteractivePawnDefinition definition,
             ItemCatalogDefinition catalog = null)
         {
-            if (selectedObject == null || definition == null)
+            if (selectedObject == null ||
+                definition == null ||
+                !definition.SupportsFullCharacterSheet)
+            {
                 return null;
+            }
 
             var pawn = ResolveInteractivePawn(selectedObject);
             var root = pawn != null ? pawn.gameObject : selectedObject;
@@ -854,6 +858,8 @@ namespace Trpg.UI.Inventory
         private Text _emptyText;
         private Button _addButton;
         private Button _closeButton;
+        private Button _detailApplyButton;
+        private Button _detailRemoveButton;
         private Font _font;
         private bool _isEmbedded;
         private RectTransform _legacyRootParent;
@@ -907,6 +913,7 @@ namespace Trpg.UI.Inventory
         private bool _isVisible;
         private bool _isWindowDragging;
         private bool _hasUserMovedWindow;
+        private bool _isReadOnly;
 
         public event Action<InventoryItemDraft> AddRequested;
         public event Action<string> RemoveRequested;
@@ -918,6 +925,44 @@ namespace Trpg.UI.Inventory
         public bool IsEmbedded => _isEmbedded;
         public RectTransform RootRect => _rootRect;
         public RectTransform PanelRect => _panelRect;
+        public bool IsReadOnly => _isReadOnly;
+
+        public void SetReadOnly(bool readOnly)
+        {
+            if (_isReadOnly == readOnly)
+                return;
+
+            _isReadOnly = readOnly;
+            if (_isReadOnly)
+            {
+                HideAddPanel();
+                ResetItemDragVisual();
+            }
+
+            ApplyReadOnlyState();
+        }
+
+        private void ApplyReadOnlyState()
+        {
+            if (_addButton != null)
+                _addButton.gameObject.SetActive(!_isReadOnly);
+
+            if (_detailQuantityInput != null)
+                _detailQuantityInput.interactable = !_isReadOnly;
+
+            if (_detailApplyButton != null)
+                _detailApplyButton.gameObject.SetActive(!_isReadOnly);
+
+            if (_detailRemoveButton != null)
+                _detailRemoveButton.gameObject.SetActive(!_isReadOnly);
+
+            if (_titleText != null)
+            {
+                _titleText.text = _isReadOnly
+                    ? "INVENTORY · READ ONLY"
+                    : "INVENTORY";
+            }
+        }
 
         public static PawnInventoryWidget CreateRuntime(
             RectTransform parentRect,
@@ -1008,6 +1053,7 @@ namespace Trpg.UI.Inventory
             RebuildCatalogItems();
             RefreshWeight(currentWeight, capacity);
             RebuildSlots();
+            ApplyReadOnlyState();
 
             if (!string.IsNullOrWhiteSpace(_detailRuntimeId))
             {
@@ -1034,6 +1080,7 @@ namespace Trpg.UI.Inventory
                 _canvasGroup.interactable = true;
                 _canvasGroup.blocksRaycasts = true;
             }
+            ApplyReadOnlyState();
 
             Canvas.ForceUpdateCanvases();
             if (!_isEmbedded)
@@ -1170,6 +1217,7 @@ namespace Trpg.UI.Inventory
                 new Vector2(-62f, -16f),
                 new Vector2(38f, 34f));
             _addButton.onClick.AddListener(ShowAddPanel);
+            ApplyReadOnlyState();
 
             _closeButton = CreateButton(
                 "CloseButton",
@@ -1712,35 +1760,37 @@ namespace Trpg.UI.Inventory
                 new Vector2(30f, 4f),
                 new Vector2(170f, 38f));
 
-            var apply = CreateButton(
+            _detailApplyButton = CreateButton(
                 "ApplyQuantity",
                 _detailPanelRect,
                 "개수 적용",
                 15,
                 new Color(0.08f, 0.30f, 0.30f, 1f));
             SetRect(
-                apply.GetComponent<RectTransform>(),
+                _detailApplyButton.GetComponent<RectTransform>(),
                 new Vector2(0.5f, 0f),
                 new Vector2(0.5f, 0f),
                 new Vector2(0.5f, 0f),
                 new Vector2(0f, 92f),
                 new Vector2(244f, 38f));
-            apply.onClick.AddListener(SubmitDetailQuantity);
+            _detailApplyButton.onClick.AddListener(
+                SubmitDetailQuantity);
 
-            var remove = CreateButton(
+            _detailRemoveButton = CreateButton(
                 "Remove",
                 _detailPanelRect,
                 "삭제",
                 15,
                 new Color(0.34f, 0.08f, 0.08f, 1f));
             SetRect(
-                remove.GetComponent<RectTransform>(),
+                _detailRemoveButton.GetComponent<RectTransform>(),
                 new Vector2(0.5f, 0f),
                 new Vector2(0.5f, 0f),
                 new Vector2(0.5f, 0f),
                 new Vector2(-66f, 38f),
                 new Vector2(114f, 40f));
-            remove.onClick.AddListener(SubmitRemove);
+            _detailRemoveButton.onClick.AddListener(SubmitRemove);
+            ApplyReadOnlyState();
 
             var close = CreateButton(
                 "Close",
@@ -1877,6 +1927,9 @@ namespace Trpg.UI.Inventory
             int sourceIndex,
             GameObject slot)
         {
+            if (_isReadOnly)
+                return;
+
             var pointer = eventData as PointerEventData;
             if (pointer != null &&
                 pointer.button != PointerEventData.InputButton.Left)
@@ -1899,6 +1952,12 @@ namespace Trpg.UI.Inventory
 
         private void EndItemDrag()
         {
+            if (_isReadOnly)
+            {
+                ResetItemDragVisual();
+                return;
+            }
+
             var runtimeId = _dragRuntimeId;
             var targetIndex = _dragTargetIndex;
             ResetItemDragVisual();
@@ -2193,6 +2252,9 @@ namespace Trpg.UI.Inventory
 
         private void ShowAddPanel()
         {
+            if (_isReadOnly)
+                return;
+
             HideDetailPanel();
             HideSelectionPopups();
             _usesCatalogMode = _catalogItems.Count > 0;
@@ -2325,6 +2387,9 @@ namespace Trpg.UI.Inventory
 
         private void SubmitAdd()
         {
+            if (_isReadOnly)
+                return;
+
             if (!int.TryParse(_quantityInput.text, out var quantity))
             {
                 _addErrorText.text = "개수는 정수로 입력하십시오.";
@@ -2417,6 +2482,7 @@ namespace Trpg.UI.Inventory
             _detailWeightText.text =
                 $"개당 {item.UnitWeight:0.###} / 총 {item.TotalWeight:0.###}";
             _detailQuantityInput.text = item.Quantity.ToString();
+            ApplyReadOnlyState();
         }
 
         private void HideDetailPanel()
@@ -2428,6 +2494,9 @@ namespace Trpg.UI.Inventory
 
         private void SubmitDetailQuantity()
         {
+            if (_isReadOnly)
+                return;
+
             if (string.IsNullOrWhiteSpace(_detailRuntimeId) ||
                 !int.TryParse(_detailQuantityInput.text, out var quantity))
             {
@@ -2441,6 +2510,9 @@ namespace Trpg.UI.Inventory
 
         private void SubmitRemove()
         {
+            if (_isReadOnly)
+                return;
+
             var runtimeId = _detailRuntimeId;
             HideDetailPanel();
             if (!string.IsNullOrWhiteSpace(runtimeId))

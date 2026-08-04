@@ -89,8 +89,13 @@ namespace Trpg.Pawns
 
         public void RequestTab(SheetTab tab)
         {
-            if (!_connected || tab == SheetTab.None)
+            if (!_connected ||
+                tab == SheetTab.None ||
+                _infoBar == null ||
+                !CanOpenTab(tab))
+            {
                 return;
+            }
 
             _pawnUiManager?.FlushPendingEdits();
             if (_pawnManager != null &&
@@ -105,8 +110,13 @@ namespace Trpg.Pawns
 
         public void RequestCheckRoll()
         {
-            if (!_connected)
+            if (!_connected ||
+                _infoBar == null ||
+                !_infoBar.HasStats ||
+                !_pawnUiManager.CanCurrentCharacterRoll)
+            {
                 return;
+            }
 
             if (_pawnManager != null &&
                 _pawnManager.IsMovementModeActive)
@@ -121,10 +131,40 @@ namespace Trpg.Pawns
             _stateMachine.ClickCheckRoll();
         }
 
+        public bool RollRandomSource(
+            PawnCheckSourceData source)
+        {
+            if (!_connected ||
+                !source.IsValid ||
+                _infoBar == null ||
+                !_infoBar.HasStats ||
+                !_pawnUiManager.CanCurrentCharacterRoll)
+            {
+                return false;
+            }
+
+            if (_pawnManager != null &&
+                _pawnManager.IsMovementModeActive)
+            {
+                _pawnManager.SetMovementMode(false);
+            }
+
+            OpenRollForSource(source);
+            _checkRollManager?.SetDifficultyFromBoardStack(
+                PawnCheckDifficulty.Regular);
+            return _checkRollManager != null &&
+                   _checkRollManager.RollFromBoardStack();
+        }
+
         public void RequestEffectRoll()
         {
-            if (!_connected)
+            if (!_connected ||
+                _infoBar == null ||
+                !_infoBar.HasStats ||
+                !_pawnUiManager.CanCurrentCharacterRoll)
+            {
                 return;
+            }
 
             if (_pawnManager != null &&
                 _pawnManager.IsMovementModeActive)
@@ -261,6 +301,8 @@ namespace Trpg.Pawns
 
         private void BindInfoBar()
         {
+            _infoBar.BoardStackIdentityRequested +=
+                HandleIdentityRequested;
             _infoBar.BoardStackStatsRequested += HandleStatsRequested;
             _infoBar.BoardStackBagRequested += HandleBagRequested;
             _infoBar.BoardStackProfileRequested += HandleProfileRequested;
@@ -276,6 +318,8 @@ namespace Trpg.Pawns
             if (_infoBar == null)
                 return;
 
+            _infoBar.BoardStackIdentityRequested -=
+                HandleIdentityRequested;
             _infoBar.BoardStackStatsRequested -= HandleStatsRequested;
             _infoBar.BoardStackBagRequested -= HandleBagRequested;
             _infoBar.BoardStackProfileRequested -= HandleProfileRequested;
@@ -317,8 +361,47 @@ namespace Trpg.Pawns
             _widget.RollRequested -= HandleRollRequested;
         }
 
+
+        private bool CanOpenTab(SheetTab tab)
+        {
+            if (_infoBar == null)
+                return false;
+
+            switch (tab)
+            {
+                case SheetTab.Stats:
+                    return _infoBar.HasIdentityDetail;
+                case SheetTab.Bag:
+                    return _infoBar.HasInventory;
+                case SheetTab.Profile:
+                    return _infoBar.HasProfile;
+                default:
+                    return false;
+            }
+        }
+
+        private void HandleIdentityRequested()
+        {
+            if (_infoBar == null || !_infoBar.HasIdentityDetail)
+                return;
+
+            _pawnUiManager?.FlushPendingEdits();
+            if (_pawnManager != null &&
+                _pawnManager.IsMovementModeActive)
+            {
+                _pawnManager.SetMovementMode(false);
+            }
+
+            _leftPane = BoardLeftPane.Identity;
+            _rightPane = BoardRightPane.Stats;
+            EnsureSheetOpen(SheetTab.Stats);
+        }
+
         private void HandleStatsRequested()
         {
+            if (_infoBar == null || !_infoBar.HasStats)
+                return;
+
             _leftPane = BoardLeftPane.Identity;
             _rightPane = BoardRightPane.Stats;
             RequestTab(SheetTab.Stats);
@@ -326,18 +409,32 @@ namespace Trpg.Pawns
 
         private void HandleBagRequested()
         {
+            if (_infoBar == null || !_infoBar.HasInventory)
+                return;
+
             _leftPane = BoardLeftPane.Inventory;
             RequestTab(SheetTab.Bag);
         }
 
         private void HandleProfileRequested()
         {
+            if (_infoBar == null || !_infoBar.HasProfile)
+                return;
+
             _leftPane = BoardLeftPane.Profile;
             RequestTab(SheetTab.Profile);
         }
 
         private void HandleLeftPaneRequested(BoardLeftPane pane)
         {
+            if (pane == BoardLeftPane.Inventory &&
+                (_infoBar == null || !_infoBar.HasInventory) ||
+                pane == BoardLeftPane.Profile &&
+                (_infoBar == null || !_infoBar.HasProfile))
+            {
+                pane = BoardLeftPane.Identity;
+            }
+
             _leftPane = pane;
             var focus = pane == BoardLeftPane.Inventory
                 ? SheetTab.Bag
@@ -350,6 +447,12 @@ namespace Trpg.Pawns
 
         private void HandleRightPaneRequested(BoardRightPane pane)
         {
+            if (pane == BoardRightPane.Skills &&
+                (_infoBar == null || !_infoBar.BoardStackInfo.HasSkills))
+            {
+                pane = BoardRightPane.Stats;
+            }
+
             _rightPane = pane;
             _effectRollActive = false;
             _stateMachine.FocusSheet(
@@ -389,6 +492,56 @@ namespace Trpg.Pawns
         {
             _widget.gameObject.SetActive(true);
             _widget.BindInfo(data);
+            if (!data.HasIdentityDetail)
+            {
+                _pawnUiManager?.FlushPendingEdits();
+                HideEmbeddedWidgets();
+                _stateMachine.ForceIdle();
+                _widget.SetPanelsImmediate(false, false);
+                _widget.HideRollOverlayImmediate();
+                return;
+            }
+
+            if (!data.HasStats)
+            {
+                _pawnUiManager?.FlushPendingEdits();
+                HideEmbeddedWidgets();
+                _leftPane = BoardLeftPane.Identity;
+                _rightPane = BoardRightPane.Stats;
+                _widget.HideRollOverlayImmediate();
+            }
+
+            if (!data.HasInventory &&
+                _leftPane == BoardLeftPane.Inventory ||
+                !data.HasProfile &&
+                _leftPane == BoardLeftPane.Profile)
+            {
+                _leftPane = BoardLeftPane.Identity;
+            }
+
+            if (!data.HasSkills)
+                _rightPane = BoardRightPane.Stats;
+
+            var state = _stateMachine.State;
+            var invalidTab =
+                state.Tab == SheetTab.Bag && !data.HasInventory ||
+                state.Tab == SheetTab.Profile && !data.HasProfile;
+            var invalidDetail =
+                !data.HasStats &&
+                state.Detail != SheetDetail.None;
+            if (state.Mode == BoardMode.Sheet &&
+                (invalidTab || invalidDetail))
+            {
+                _stateMachine.FocusSheet(
+                    SheetTab.Stats,
+                    SheetDetail.None);
+            }
+            else if (state.Mode == BoardMode.Sheet)
+            {
+                _widget.SetLeftPane(_leftPane);
+                _widget.SetRightPane(_rightPane);
+                _widget.SetPanelsImmediate(true, data.HasStats);
+            }
         }
 
         private void HandleStatsChanged(PawnStatPanelData data)
@@ -429,8 +582,14 @@ namespace Trpg.Pawns
 
         private void HandleDragStarted(PawnCheckSourceData source)
         {
-            if (!_connected || !source.IsValid)
+            if (!_connected ||
+                !source.IsValid ||
+                _infoBar == null ||
+                !_infoBar.HasStats ||
+                !_pawnUiManager.CanCurrentCharacterRoll)
+            {
                 return;
+            }
 
             _dropAccepted = false;
             _hadRollBeforeDrag =
@@ -577,6 +736,8 @@ namespace Trpg.Pawns
             var isSheet = next.Mode == BoardMode.Sheet;
             var hadRoll = previous.Detail == SheetDetail.RollRoulette;
             var hasRoll = next.Detail == SheetDetail.RollRoulette;
+            var showRightPanel =
+                _infoBar != null && _infoBar.HasStats;
 
             if (isSheet)
             {
@@ -592,7 +753,7 @@ namespace Trpg.Pawns
             if (!wasSheet && isSheet)
             {
                 _widget.LeftMask.gameObject.SetActive(true);
-                _widget.RightMask.gameObject.SetActive(true);
+                _widget.RightMask.gameObject.SetActive(showRightPanel);
                 _widget.SetPanelInput(false);
                 _widget.LeftMask.sizeDelta = new Vector2(
                     _layout.LeftWidth,
@@ -611,24 +772,30 @@ namespace Trpg.Pawns
                                 _widget.LeftPanelHeight),
                             SheetOpenDuration)
                         .SetEase(Ease.OutCubic));
-                sequence.Insert(
-                    0f,
-                    _widget.RightMask.DOSizeDelta(
-                            new Vector2(
-                                _layout.RightWidth,
-                                _widget.RightPanelHeight),
-                            SheetOpenDuration)
-                        .SetEase(Ease.OutCubic));
+                if (showRightPanel)
+                {
+                    sequence.Insert(
+                        0f,
+                        _widget.RightMask.DOSizeDelta(
+                                new Vector2(
+                                    _layout.RightWidth,
+                                    _widget.RightPanelHeight),
+                                SheetOpenDuration)
+                            .SetEase(Ease.OutCubic));
+                }
                 sequence.Insert(
                     ContentDelay,
                     _widget.LeftContentGroup.DOFade(
                         1f,
                         ContentFadeDuration));
-                sequence.Insert(
-                    ContentDelay,
-                    _widget.RightContentGroup.DOFade(
-                        1f,
-                        ContentFadeDuration));
+                if (showRightPanel)
+                {
+                    sequence.Insert(
+                        ContentDelay,
+                        _widget.RightContentGroup.DOFade(
+                            1f,
+                            ContentFadeDuration));
+                }
                 sequence.InsertCallback(
                     SheetOpenDuration,
                     () => _widget?.SetPanelInput(true));
@@ -641,23 +808,29 @@ namespace Trpg.Pawns
                     _widget.LeftContentGroup.DOFade(
                         0f,
                         SheetCloseDuration * 0.72f));
-                sequence.Insert(
-                    0f,
-                    _widget.RightContentGroup.DOFade(
+                if (_widget.RightMask.gameObject.activeSelf)
+                {
+                    sequence.Insert(
                         0f,
-                        SheetCloseDuration * 0.72f));
+                        _widget.RightContentGroup.DOFade(
+                            0f,
+                            SheetCloseDuration * 0.72f));
+                }
                 sequence.Insert(
                     0f,
                     _widget.LeftMask.DOSizeDelta(
                             new Vector2(_layout.LeftWidth, 0f),
                             SheetCloseDuration)
                         .SetEase(Ease.InCubic));
-                sequence.Insert(
-                    0f,
-                    _widget.RightMask.DOSizeDelta(
-                            new Vector2(_layout.RightWidth, 0f),
-                            SheetCloseDuration)
-                        .SetEase(Ease.InCubic));
+                if (_widget.RightMask.gameObject.activeSelf)
+                {
+                    sequence.Insert(
+                        0f,
+                        _widget.RightMask.DOSizeDelta(
+                                new Vector2(_layout.RightWidth, 0f),
+                                SheetCloseDuration)
+                            .SetEase(Ease.InCubic));
+                }
                 sequence.InsertCallback(
                     SheetCloseDuration,
                     () =>
@@ -681,6 +854,9 @@ namespace Trpg.Pawns
                             return;
                         _widget.SetLeftPane(_leftPane);
                         _widget.SetRightPane(_rightPane);
+                        _widget.SetPanelsImmediate(
+                            true,
+                            _infoBar != null && _infoBar.HasStats);
                         _widget.SetPanelInput(true);
                     });
             }
@@ -725,13 +901,24 @@ namespace Trpg.Pawns
 
         private void EnsureEmbeddedWidgets()
         {
-            if (_embeddedWidgetsReady)
+            if (_embeddedWidgetsReady ||
+                _infoBar == null ||
+                !_infoBar.HasStats)
+            {
                 return;
+            }
 
-            _pawnUiManager.ShowInventoryInBoardStack(
-                _widget.BagHost);
-            _pawnUiManager.ShowProfileInBoardStack(
-                _widget.ProfileHost);
+            if (_infoBar.HasInventory)
+            {
+                _pawnUiManager.ShowInventoryInBoardStack(
+                    _widget.BagHost);
+            }
+
+            if (_infoBar.HasProfile)
+            {
+                _pawnUiManager.ShowProfileInBoardStack(
+                    _widget.ProfileHost);
+            }
 
             _statPanel = _infoBar.BoardStackStatPanel;
             if (_statPanel != null)
@@ -775,7 +962,9 @@ namespace Trpg.Pawns
                 _widget.SetLeftPane(_leftPane);
                 _widget.SetRightPane(_rightPane);
             }
-            _widget.SetPanelsImmediate(visible);
+            _widget.SetPanelsImmediate(
+                visible,
+                visible && _infoBar != null && _infoBar.HasStats);
 
             if (state.Detail == SheetDetail.RollRoulette)
             {

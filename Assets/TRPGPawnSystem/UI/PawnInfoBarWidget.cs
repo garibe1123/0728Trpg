@@ -10,19 +10,59 @@ namespace Trpg.Pawns
         public PawnInfoBarData(
             string displayName,
             string description,
+            string gmInstructions,
             Sprite portrait,
-            int movementScore)
+            int movementScore,
+            bool hasIdentityDetail,
+            bool showGmInstructions,
+            bool showMovement,
+            bool hasStats,
+            bool hasSkills,
+            bool hasInventory,
+            bool hasProfile,
+            bool showGmStateControls,
+            bool isHidden,
+            bool isDead,
+            bool canRoll,
+            bool canMove)
         {
             DisplayName = displayName;
             Description = description;
+            GmInstructions = gmInstructions;
             Portrait = portrait;
             MovementScore = movementScore;
+            HasIdentityDetail = hasIdentityDetail;
+            ShowGmInstructions = showGmInstructions;
+            ShowMovement = showMovement;
+            HasStats = hasStats;
+            HasSkills = hasSkills;
+            HasInventory = hasInventory;
+            HasProfile = hasProfile;
+            ShowGmStateControls = showGmStateControls;
+            IsHidden = isHidden;
+            IsDead = isDead;
+            CanRoll = canRoll;
+            CanMove = canMove;
         }
 
         public string DisplayName { get; }
         public string Description { get; }
+        public string GmInstructions { get; }
         public Sprite Portrait { get; }
         public int MovementScore { get; }
+        public bool HasIdentityDetail { get; }
+        public bool ShowGmInstructions { get; }
+        public bool ShowMovement { get; }
+        public bool HasStats { get; }
+        public bool HasSkills { get; }
+        public bool HasInventory { get; }
+        public bool HasProfile { get; }
+        public bool ShowGmStateControls { get; }
+        public bool IsHidden { get; }
+        public bool IsDead { get; }
+        public bool CanRoll { get; }
+        public bool HasCharacterSheet => HasStats;
+        public bool CanMove { get; }
     }
 
     public sealed class PawnInfoBarWidget : MonoBehaviour
@@ -44,6 +84,9 @@ namespace Trpg.Pawns
         private const float ActionButtonSpacing = 10f;
         private const float ActionRightInset = 24f;
         private const float ActionBottomInset = 30f;
+        private const float GmStateButtonWidth = 126f;
+        private const float GmStateButtonHeight = 42f;
+        private const float GmStateButtonSpacing = 8f;
 
         [SerializeField] private RectTransform _panel;
         [SerializeField] private CanvasGroup _canvasGroup;
@@ -70,6 +113,11 @@ namespace Trpg.Pawns
         private RectTransform _actionGroup;
         private RectTransform _checkRollButtonRect;
         private RectTransform _effectRollButtonRect;
+        private RectTransform _gmStateGroup;
+        private Button _hidePawnButton;
+        private Button _deathPawnButton;
+        private Text _hidePawnButtonText;
+        private Text _deathPawnButtonText;
 
         private GameObject _ownedBoardOverlayCanvas;
         private Vector2 _shownPosition;
@@ -95,11 +143,20 @@ namespace Trpg.Pawns
         private bool _hasBoardStackStats;
         private PawnInfoBarData _boardStackInfo;
         private PawnStatPanelData _boardStackStats;
+        private bool _hasCharacterSheet;
+        private bool _hasIdentityDetail;
+        private bool _showMovement;
+        private bool _hasProfile;
+        private bool _hasInventory;
+        private bool _showGmStateControls;
+        private bool _boundPawnHidden;
+        private bool _boundPawnDead;
 
         public event Action CloseRequested;
         public event Action MoveRequested;
         public event Action RollInputOpened;
         public event Action<PawnCheckRollRequest> CheckRollRequested;
+        public event Action<string> StatRerollRequested;
         public event Action<PawnEffectRollRequest> EffectRollRequested;
         public event Action RollPresentationCompleted;
         public event Action<string, double> StatValueEditRequested;
@@ -118,6 +175,9 @@ namespace Trpg.Pawns
         public event Action PlayerHudRequested;
         public event Action InventoryRequested;
         public event Action ProfileRequested;
+        public event Action HiddenToggleRequested;
+        public event Action DeathToggleRequested;
+        public event Action BoardStackIdentityRequested;
         public event Action BoardStackStatsRequested;
         public event Action BoardStackBagRequested;
         public event Action BoardStackProfileRequested;
@@ -154,6 +214,11 @@ namespace Trpg.Pawns
         public bool IsBoardStackMode => _boardStackMode;
         public bool HasBoardStackInfo => _hasBoardStackInfo;
         public bool HasBoardStackStats => _hasBoardStackStats;
+        public bool HasCharacterSheet => _hasCharacterSheet;
+        public bool HasIdentityDetail => _hasIdentityDetail;
+        public bool HasStats => _hasCharacterSheet;
+        public bool HasProfile => _hasProfile;
+        public bool HasInventory => _hasInventory;
         public PawnInfoBarData BoardStackInfo => _boardStackInfo;
         public PawnStatPanelData BoardStackStats => _boardStackStats;
         public PawnStatPanelWidget BoardStackStatPanel
@@ -179,11 +244,37 @@ namespace Trpg.Pawns
         {
             _boardStackMode = enabled;
             EnsureRollWidget();
-            _rollWidget?.SetActionButtonsVisible(!enabled);
-            _statPanel?.SetLegacyLauncherVisible(!enabled);
-            if (enabled)
+            _rollWidget?.SetActionButtonsVisible(
+                _hasCharacterSheet && !enabled);
+            _statPanel?.SetLegacyLauncherVisible(
+                _hasCharacterSheet && !enabled);
+            if (enabled || !_hasCharacterSheet)
                 _statPanel?.SetExpanded(false);
             ApplyActionButtonLayout();
+            RefreshStatToggleVisual();
+        }
+
+        public void SetCharacterSheetEnabled(bool enabled)
+        {
+            _hasCharacterSheet = enabled;
+            EnsureRollWidget();
+            _rollWidget?.SetButtonsEnabled(enabled);
+            _rollWidget?.SetActionButtonsVisible(
+                enabled && !_boardStackMode);
+
+            if (!enabled)
+            {
+                ClearStats();
+                _statPanel?.SetExpanded(false);
+            }
+
+            if (_statToggleButton != null)
+            {
+                _statToggleButton.interactable = enabled;
+                _statToggleButton.gameObject.SetActive(
+                    enabled && _hasBoardStackStats);
+            }
+
             RefreshStatToggleVisual();
         }
 
@@ -205,35 +296,59 @@ namespace Trpg.Pawns
             _portraitImage.enabled = data.Portrait != null;
             _boardStackInfo = data;
             _hasBoardStackInfo = true;
-            BoardStackInfoChanged?.Invoke(data);
+            _hasIdentityDetail = data.HasIdentityDetail;
+            _showMovement = data.ShowMovement;
             EnsurePortraitButton();
             BindPortraitButton();
             EnsureInventoryButton();
             BindInventoryButton();
-            SetInventoryButtonEnabled(true);
+            _hasProfile = data.HasProfile;
+            _hasInventory = data.HasInventory;
+            SetCharacterSheetEnabled(data.HasStats);
+            SetProfileButtonEnabled(data.HasProfile);
+            SetInventoryButtonEnabled(data.HasInventory);
+            SetGmStateControls(
+                data.ShowGmStateControls,
+                data.IsHidden,
+                data.IsDead);
             _movementScore = data.MovementScore;
             _hasMovementBudget = false;
             EnsureMoveButton();
+            if (_moveButton != null)
+                _moveButton.gameObject.SetActive(data.CanMove);
+            if (_movementText != null)
+                _movementText.gameObject.SetActive(data.ShowMovement);
             SetMovementModeState(false, false);
             EnsureRollWidget();
-            _rollWidget?.SetButtonsEnabled(true);
+            _rollWidget?.SetButtonsEnabled(data.CanRoll);
             EnsureResourceBar();
             EnsureStatPanel();
             EnsureStatToggleButton();
+            BoardStackInfoChanged?.Invoke(data);
             Show();
         }
         public void Unbind()
         {
+            _hasCharacterSheet = false;
+            _hasIdentityDetail = false;
+            _showMovement = false;
+            _hasProfile = false;
+            _hasInventory = false;
             _hasBoardStackInfo = false;
             _hasBoardStackStats = false;
             BoardStackUnbound?.Invoke();
             SetProfileButtonEnabled(false);
             SetInventoryButtonEnabled(false);
+            SetGmStateControls(false, false, false);
             Hide();
             _nameText.text = string.Empty;
             _descriptionText.text = string.Empty;
             _hasMovementBudget = false;
             SetMovementModeState(false, false);
+            if (_moveButton != null)
+                _moveButton.gameObject.SetActive(false);
+            if (_movementText != null)
+                _movementText.gameObject.SetActive(false);
             _rollWidget?.CancelPresentation();
             _rollWidget?.SetButtonsEnabled(false);
             ClearResourceStats();
@@ -243,6 +358,12 @@ namespace Trpg.Pawns
         }
         public void SetStats(in PawnStatPanelData data)
         {
+            if (!_hasCharacterSheet)
+            {
+                ClearStats();
+                return;
+            }
+
             _boardStackStats = data;
             _hasBoardStackStats = true;
             BoardStackStatsChanged?.Invoke(data);
@@ -351,7 +472,7 @@ namespace Trpg.Pawns
             float remainingMeters,
             float maximumMeters)
         {
-            if (_movementText == null)
+            if (_movementText == null || !_showMovement)
             {
                 return;
             }
@@ -515,6 +636,8 @@ namespace Trpg.Pawns
             SetInventoryButtonEnabled(false);
             BindCloseButton();
             EnsureActionGroup();
+            EnsureGmStateButtons();
+            BindGmStateButtons();
             EnsureRollWidget();
             BindRollWidget();
             EnsureResourceBar();
@@ -607,6 +730,7 @@ namespace Trpg.Pawns
             UnbindResourceBar();
             UnbindStatPanel();
             UnbindStatToggleButton();
+            UnbindGmStateButtons();
             if (_ownedBoardOverlayCanvas != null)
             {
                 Destroy(_ownedBoardOverlayCanvas);
@@ -618,6 +742,7 @@ namespace Trpg.Pawns
             MoveRequested = null;
             RollInputOpened = null;
             CheckRollRequested = null;
+            StatRerollRequested = null;
             EffectRollRequested = null;
             RollPresentationCompleted = null;
             StatValueEditRequested = null;
@@ -630,6 +755,9 @@ namespace Trpg.Pawns
             PlayerHudRequested = null;
             InventoryRequested = null;
             ProfileRequested = null;
+            HiddenToggleRequested = null;
+            DeathToggleRequested = null;
+            BoardStackIdentityRequested = null;
             BoardStackStatsRequested = null;
             BoardStackBagRequested = null;
             BoardStackProfileRequested = null;
@@ -685,18 +813,31 @@ namespace Trpg.Pawns
         {
             EnsurePortraitButton();
             if (_portraitButton != null)
-                _portraitButton.interactable = enabled;
+            {
+                _portraitButton.interactable =
+                    enabled || _hasIdentityDetail;
+            }
         }
 
         private void HandlePortraitClicked()
         {
             if (_boardStackMode)
             {
-                BoardStackProfileRequested?.Invoke();
-                return;
+                if (_hasProfile)
+                {
+                    BoardStackProfileRequested?.Invoke();
+                    return;
+                }
+
+                if (_hasIdentityDetail)
+                {
+                    BoardStackIdentityRequested?.Invoke();
+                    return;
+                }
             }
 
-            ProfileRequested?.Invoke();
+            if (_hasProfile)
+                ProfileRequested?.Invoke();
         }
 
         private void EnsureInventoryButton()
@@ -780,6 +921,9 @@ namespace Trpg.Pawns
 
         private void HandleInventoryClicked()
         {
+            if (!_hasInventory)
+                return;
+
             if (_boardStackMode)
             {
                 BoardStackBagRequested?.Invoke();
@@ -896,6 +1040,14 @@ namespace Trpg.Pawns
                 return;
             }
 
+            if (!_showMovement)
+            {
+                _movementText.text = string.Empty;
+                _movementText.gameObject.SetActive(false);
+                return;
+            }
+
+            _movementText.gameObject.SetActive(true);
             _movementText.text = _hasMovementBudget
                 ? $"이동 {_remainingMovementMeters:0.0}m 남음"
                 : "이동";
@@ -924,7 +1076,8 @@ namespace Trpg.Pawns
         {
             if (_rollWidget != null || _panel == null)
             {
-                _rollWidget?.SetActionButtonsVisible(!_boardStackMode);
+                _rollWidget?.SetActionButtonsVisible(
+                    _hasCharacterSheet && !_boardStackMode);
                 ApplyActionRowContentPadding();
                 return;
             }
@@ -932,8 +1085,181 @@ namespace Trpg.Pawns
             _rollWidget = PawnRollWidget.CreateRuntime(
                 _panel,
                 _movementText != null ? _movementText.font : null);
-            _rollWidget.SetActionButtonsVisible(!_boardStackMode);
+            _rollWidget.SetActionButtonsVisible(
+                _hasCharacterSheet && !_boardStackMode);
             ApplyActionRowContentPadding();
+        }
+
+        public void SetGmStateControls(
+            bool visible,
+            bool hidden,
+            bool dead)
+        {
+            _showGmStateControls = visible;
+            _boundPawnHidden = hidden;
+            _boundPawnDead = dead;
+            EnsureGmStateButtons();
+            RefreshGmStateButtons();
+        }
+
+        private void EnsureGmStateButtons()
+        {
+            if (_gmStateGroup != null || _panel == null)
+                return;
+
+            var root = new GameObject(
+                "PawnGmStateButtonGroup",
+                typeof(RectTransform));
+            _gmStateGroup = root.GetComponent<RectTransform>();
+            _gmStateGroup.SetParent(_panel, false);
+            _gmStateGroup.anchorMin = new Vector2(1f, 0f);
+            _gmStateGroup.anchorMax = new Vector2(1f, 0f);
+            _gmStateGroup.pivot = new Vector2(1f, 0f);
+            _gmStateGroup.anchoredPosition =
+                new Vector2(-ActionRightInset, 116f);
+            _gmStateGroup.sizeDelta = new Vector2(
+                GmStateButtonWidth * 2f + GmStateButtonSpacing,
+                GmStateButtonHeight);
+
+            _hidePawnButton = CreateGmStateButton(
+                _gmStateGroup,
+                "HidePawnButton",
+                Vector2.zero,
+                new Color(0.17f, 0.24f, 0.28f, 0.98f),
+                out _hidePawnButtonText);
+            _deathPawnButton = CreateGmStateButton(
+                _gmStateGroup,
+                "DeathPawnButton",
+                new Vector2(
+                    GmStateButtonWidth + GmStateButtonSpacing,
+                    0f),
+                new Color(0.34f, 0.08f, 0.08f, 0.98f),
+                out _deathPawnButtonText);
+            BindGmStateButtons();
+            RefreshGmStateButtons();
+        }
+
+        private Button CreateGmStateButton(
+            RectTransform parent,
+            string objectName,
+            Vector2 position,
+            Color color,
+            out Text label)
+        {
+            var buttonObject = new GameObject(
+                objectName,
+                typeof(RectTransform),
+                typeof(CanvasRenderer),
+                typeof(Image),
+                typeof(Button));
+            var rect = buttonObject.GetComponent<RectTransform>();
+            rect.SetParent(parent, false);
+            rect.anchorMin = Vector2.zero;
+            rect.anchorMax = Vector2.zero;
+            rect.pivot = Vector2.zero;
+            rect.anchoredPosition = position;
+            rect.sizeDelta = new Vector2(
+                GmStateButtonWidth,
+                GmStateButtonHeight);
+
+            var image = buttonObject.GetComponent<Image>();
+            image.color = color;
+            var button = buttonObject.GetComponent<Button>();
+            button.targetGraphic = image;
+
+            var labelObject = new GameObject(
+                "Label",
+                typeof(RectTransform),
+                typeof(CanvasRenderer),
+                typeof(Text));
+            var labelRect = labelObject.GetComponent<RectTransform>();
+            labelRect.SetParent(rect, false);
+            labelRect.anchorMin = Vector2.zero;
+            labelRect.anchorMax = Vector2.one;
+            labelRect.offsetMin = new Vector2(6f, 3f);
+            labelRect.offsetMax = new Vector2(-6f, -3f);
+            label = labelObject.GetComponent<Text>();
+            label.font = _nameText != null && _nameText.font != null
+                ? _nameText.font
+                : Resources.GetBuiltinResource<Font>(
+                    "LegacyRuntime.ttf");
+            label.fontSize = 15;
+            label.fontStyle = FontStyle.Bold;
+            label.alignment = TextAnchor.MiddleCenter;
+            label.color = Color.white;
+            label.raycastTarget = false;
+            return button;
+        }
+
+        private void BindGmStateButtons()
+        {
+            if (_hidePawnButton != null)
+            {
+                _hidePawnButton.onClick.RemoveListener(
+                    HandleHidePawnClicked);
+                _hidePawnButton.onClick.AddListener(
+                    HandleHidePawnClicked);
+            }
+
+            if (_deathPawnButton != null)
+            {
+                _deathPawnButton.onClick.RemoveListener(
+                    HandleDeathPawnClicked);
+                _deathPawnButton.onClick.AddListener(
+                    HandleDeathPawnClicked);
+            }
+        }
+
+        private void UnbindGmStateButtons()
+        {
+            if (_hidePawnButton != null)
+            {
+                _hidePawnButton.onClick.RemoveListener(
+                    HandleHidePawnClicked);
+            }
+
+            if (_deathPawnButton != null)
+            {
+                _deathPawnButton.onClick.RemoveListener(
+                    HandleDeathPawnClicked);
+            }
+        }
+
+        private void RefreshGmStateButtons()
+        {
+            if (_gmStateGroup == null)
+                return;
+
+            _gmStateGroup.gameObject.SetActive(
+                _showGmStateControls);
+            if (!_showGmStateControls)
+                return;
+
+            if (_hidePawnButtonText != null)
+            {
+                _hidePawnButtonText.text = _boundPawnHidden
+                    ? "숨김 해제"
+                    : "숨기기";
+            }
+
+            if (_deathPawnButtonText != null)
+            {
+                _deathPawnButtonText.text = _boundPawnDead
+                    ? "사망 해제"
+                    : "사망처리";
+            }
+        }
+
+        private void HandleHidePawnClicked()
+        {
+            if (_showGmStateControls)
+                HiddenToggleRequested?.Invoke();
+        }
+
+        private void HandleDeathPawnClicked()
+        {
+            if (_showGmStateControls)
+                DeathToggleRequested?.Invoke();
         }
 
         private void EnsureActionGroup()
@@ -1022,7 +1348,8 @@ namespace Trpg.Pawns
             _statPanel = PawnStatPanelWidget.CreateRuntime(
                 _canvasRect,
                 _movementText != null ? _movementText.font : null);
-            _statPanel?.SetLegacyLauncherVisible(!_boardStackMode);
+            _statPanel?.SetLegacyLauncherVisible(
+                _hasCharacterSheet && !_boardStackMode);
         }
 
         private void BindStatPanel()
@@ -1062,6 +1389,10 @@ namespace Trpg.Pawns
                 HandleQuickCheckRequested;
             _statPanel.QuickCheckRequested +=
                 HandleQuickCheckRequested;
+            _statPanel.StatRerollRequested -=
+                HandleStatRerollRequested;
+            _statPanel.StatRerollRequested +=
+                HandleStatRerollRequested;
         }
 
         private void UnbindStatPanel()
@@ -1084,6 +1415,8 @@ namespace Trpg.Pawns
                     HandleStatPanelExpandedChanged;
                 _statPanel.QuickCheckRequested -=
                     HandleQuickCheckRequested;
+                _statPanel.StatRerollRequested -=
+                    HandleStatRerollRequested;
             }
         }
 
@@ -1128,6 +1461,13 @@ namespace Trpg.Pawns
         {
             _statPanel?.SetExpanded(false);
             OpenCheckRollInput();
+        }
+
+        private void HandleStatRerollRequested(
+            string statId)
+        {
+            if (!string.IsNullOrWhiteSpace(statId))
+                StatRerollRequested?.Invoke(statId);
         }
 
         private void OpenCheckRollInput()
@@ -1522,6 +1862,9 @@ namespace Trpg.Pawns
 
         private void HandleStatToggleClicked()
         {
+            if (!_hasCharacterSheet)
+                return;
+
             if (_boardStackMode)
             {
                 BoardStackStatsRequested?.Invoke();

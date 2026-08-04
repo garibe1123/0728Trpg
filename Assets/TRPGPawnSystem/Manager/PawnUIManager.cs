@@ -115,6 +115,13 @@ namespace Trpg.Pawns
         private TRPGNetworkGameManager _networkGameManager;
         private bool _deferredStatRefresh;
         private bool _deferredProfileRefresh;
+        private bool _boundCharacterCanEdit;
+        private bool _boundCharacterCanRoll;
+        private bool _boundCharacterCanReroll;
+        private bool _boundHasFullCharacterSheet;
+        private bool _boundSupportsSkills;
+        private bool _boundSupportsInventory;
+        private bool _boundSupportsProfile;
 
         public PawnInfoBarWidget InfoBar => _infoBar;
         public PawnManager PawnManager => _pawnManager;
@@ -128,6 +135,8 @@ namespace Trpg.Pawns
         public int EffectDiceCount => _effectDiceCount;
         public int EffectDiceSides => _effectDiceSides;
         public int EffectDiceModifier => _effectDiceModifier;
+        public bool CanCurrentCharacterRoll =>
+            _boundCharacterCanRoll;
 
         public void ConfigureNetworkManager(
             TRPGNetworkGameManager networkGameManager)
@@ -162,14 +171,20 @@ namespace Trpg.Pawns
 
         public bool ShowInventoryInBoardStack(RectTransform host)
         {
-            if (host == null || _boundInventoryState == null)
+            if (host == null ||
+                !_boundSupportsInventory ||
+                _boundInventoryState == null)
+            {
                 return false;
+            }
 
             EnsureInventoryWidget();
             if (_inventoryWidget == null)
                 return false;
 
             RefreshInventoryUi();
+            _inventoryWidget.SetReadOnly(
+                !_boundCharacterCanEdit);
             _inventoryWidget.SetEmbeddedMode(host, true);
             _inventoryWidget.Show();
             return true;
@@ -185,14 +200,20 @@ namespace Trpg.Pawns
 
         public bool ShowProfileInBoardStack(RectTransform host)
         {
-            if (host == null || _boundProfileState == null)
+            if (host == null ||
+                !_boundSupportsProfile ||
+                _boundProfileState == null)
+            {
                 return false;
+            }
 
             EnsureProfileWidget();
             if (_profileWidget == null)
                 return false;
 
             _profileWidget.Bind(_boundProfileState, _boundDisplayName);
+            _profileWidget.SetReadOnly(
+                !_boundCharacterCanEdit);
             _profileWidget.SetEmbeddedMode(host, true);
             _profileWidget.Show(null);
             return true;
@@ -278,6 +299,8 @@ namespace Trpg.Pawns
             _infoBar.CloseRequested += HandleCloseRequested;
             _infoBar.MoveRequested += StartWalking;
             _infoBar.CheckRollRequested += HandleCheckRollRequested;
+            _infoBar.StatRerollRequested +=
+                HandleStatRerollRequested;
             _infoBar.EffectRollRequested += HandleEffectRollRequested;
             _infoBar.RollPresentationCompleted +=
                 HandleRollPresentationCompleted;
@@ -295,6 +318,10 @@ namespace Trpg.Pawns
                 HandleInventoryRequested;
             _infoBar.ProfileRequested +=
                 HandleProfileRequested;
+            _infoBar.HiddenToggleRequested +=
+                HandleHiddenToggleRequested;
+            _infoBar.DeathToggleRequested +=
+                HandleDeathToggleRequested;
 
             BindHandoutSystem();
             BindWalkButton();
@@ -345,6 +372,8 @@ namespace Trpg.Pawns
                 _infoBar.CloseRequested -= HandleCloseRequested;
                 _infoBar.MoveRequested -= StartWalking;
                 _infoBar.CheckRollRequested -= HandleCheckRollRequested;
+                _infoBar.StatRerollRequested -=
+                    HandleStatRerollRequested;
                 _infoBar.EffectRollRequested -= HandleEffectRollRequested;
                 _infoBar.RollPresentationCompleted -=
                     HandleRollPresentationCompleted;
@@ -362,6 +391,10 @@ namespace Trpg.Pawns
                     HandleInventoryRequested;
                 _infoBar.ProfileRequested -=
                     HandleProfileRequested;
+                _infoBar.HiddenToggleRequested -=
+                    HandleHiddenToggleRequested;
+                _infoBar.DeathToggleRequested -=
+                    HandleDeathToggleRequested;
                 _infoBar.Hide();
             }
 
@@ -420,6 +453,70 @@ namespace Trpg.Pawns
             }
         }
 
+        private void HandleHiddenToggleRequested()
+        {
+            var pawn = _pawnManager != null
+                ? _pawnManager.SelectedInteractive
+                : null;
+            if (pawn == null ||
+                pawn.Definition == null ||
+                !pawn.Definition.IsNpc ||
+                !IsLocalGameMasterOrOffline())
+            {
+                return;
+            }
+
+            var authority = TRPGSessionAuthority.Instance;
+            if (authority != null && authority.IsOnline)
+            {
+                authority.SetHostPawnHidden(
+                    pawn,
+                    !pawn.IsHidden);
+                return;
+            }
+
+            var next = !pawn.IsHidden;
+            pawn.SetRuntimeState(next, pawn.IsDead);
+            PawnRollLogService.RecordAction(
+                pawn,
+                next ? "NPC 숨김" : "NPC 숨김 해제",
+                next
+                    ? "GM이 보드에서 NPC를 숨겼습니다."
+                    : "GM이 보드에 NPC를 다시 표시했습니다.");
+        }
+
+        private void HandleDeathToggleRequested()
+        {
+            var pawn = _pawnManager != null
+                ? _pawnManager.SelectedInteractive
+                : null;
+            if (pawn == null ||
+                pawn.Definition == null ||
+                !pawn.Definition.IsNpc ||
+                !IsLocalGameMasterOrOffline())
+            {
+                return;
+            }
+
+            var authority = TRPGSessionAuthority.Instance;
+            if (authority != null && authority.IsOnline)
+            {
+                authority.SetHostPawnDead(
+                    pawn,
+                    !pawn.IsDead);
+                return;
+            }
+
+            var next = !pawn.IsDead;
+            pawn.SetRuntimeState(pawn.IsHidden, next);
+            PawnRollLogService.RecordAction(
+                pawn,
+                next ? "NPC 사망처리" : "NPC 사망 해제",
+                next
+                    ? "GM이 NPC를 사망 상태로 처리했습니다."
+                    : "GM이 NPC의 사망 상태를 해제했습니다.");
+        }
+
         private void HandleCloseRequested()
         {
             FlushPendingEdits();
@@ -434,6 +531,13 @@ namespace Trpg.Pawns
             FlushPendingEdits();
             _deferredStatRefresh = false;
             _deferredProfileRefresh = false;
+            _boundCharacterCanEdit = false;
+            _boundCharacterCanRoll = false;
+            _boundCharacterCanReroll = false;
+            _boundHasFullCharacterSheet = false;
+            _boundSupportsSkills = false;
+            _boundSupportsInventory = false;
+            _boundSupportsProfile = false;
             UnbindStatState();
             UnbindSkillState();
             UnbindInventoryState();
@@ -456,22 +560,64 @@ namespace Trpg.Pawns
                 return;
             }
 
-            PlayerStatState.SetActiveFrom(pawn.gameObject);
-
             var definition = pawn.Definition;
+            var isLocalGameMaster = IsLocalGameMasterOrOffline();
+            var showMovement = CanViewMovementInformation(pawn);
+            _boundHasFullCharacterSheet = CanViewStats(pawn);
+            _boundSupportsSkills =
+                _boundHasFullCharacterSheet &&
+                definition.SupportsSkills;
+            _boundSupportsInventory =
+                _boundHasFullCharacterSheet &&
+                definition.SupportsInventory;
+            _boundSupportsProfile =
+                _boundHasFullCharacterSheet &&
+                definition.SupportsProfile;
+            _boundCharacterCanEdit = CanEditCharacter(pawn);
+            _boundCharacterCanRoll = CanRollCharacter(pawn);
+            _boundCharacterCanReroll = CanRerollCharacter(pawn);
             var displayName =
                 string.IsNullOrWhiteSpace(definition.DisplayName)
                     ? pawn.name
                     : definition.DisplayName;
+            var showGmInstructions =
+                isLocalGameMaster && definition.IsNpc;
+            var showGmStateControls =
+                isLocalGameMaster && definition.IsNpc;
             var infoData = new PawnInfoBarData(
                 displayName,
                 definition.Description,
+                showGmInstructions
+                    ? definition.GmInstructions
+                    : string.Empty,
                 definition.Portrait,
-                definition.MovementScore);
+                showMovement ? definition.MovementScore : 0,
+                definition.HasIdentityDetail,
+                showGmInstructions,
+                showMovement,
+                _boundHasFullCharacterSheet,
+                _boundSupportsSkills,
+                _boundSupportsInventory,
+                _boundSupportsProfile,
+                showGmStateControls,
+                pawn.IsHidden,
+                pawn.IsDead,
+                _boundCharacterCanRoll,
+                CanMoveCharacter(pawn));
 
             _infoBar.Bind(infoData);
-            _infoBar.SetProfileButtonEnabled(IsPlayerPawn(pawn));
 
+            if (!_boundHasFullCharacterSheet)
+            {
+                PlayerStatState.SetActive(null);
+                _infoBar.ClearStats();
+                RefreshMovementBudget(pawn);
+                RefreshWalkButton(pawn);
+                RefreshRollButtons(pawn);
+                return;
+            }
+
+            PlayerStatState.SetActiveFrom(pawn.gameObject);
             var statState = ResolveStatState(pawn);
             if (statState != null)
             {
@@ -479,10 +625,13 @@ namespace Trpg.Pawns
                     statState,
                     displayName,
                     definition.Portrait);
-                BindSkillState(
-                    PlayerSkillState.ResolveOrCreate(
-                        pawn.gameObject,
-                        definition));
+                if (_boundSupportsSkills)
+                {
+                    BindSkillState(
+                        PlayerSkillState.ResolveOrCreate(
+                            pawn.gameObject,
+                            definition));
+                }
                 RefreshStatUi();
             }
             else
@@ -490,13 +639,16 @@ namespace Trpg.Pawns
                 _infoBar.ClearStats();
             }
 
-            BindInventoryState(
-                PlayerInventoryState.ResolveOrCreate(
-                    pawn.gameObject,
-                    definition,
-                    _itemCatalog));
+            if (_boundSupportsInventory)
+            {
+                BindInventoryState(
+                    PlayerInventoryState.ResolveOrCreate(
+                        pawn.gameObject,
+                        definition,
+                        _itemCatalog));
+            }
 
-            if (IsPlayerPawn(pawn))
+            if (_boundSupportsProfile)
             {
                 BindProfileState(
                     PawnProfileState.ResolveOrCreate(
@@ -511,7 +663,9 @@ namespace Trpg.Pawns
 
         public void StartWalking()
         {
-            if (_pawnManager == null)
+            if (_pawnManager == null ||
+                !CanMoveCharacter(
+                    _pawnManager.SelectedInteractive))
             {
                 return;
             }
@@ -719,6 +873,12 @@ namespace Trpg.Pawns
             string statId,
             double value)
         {
+            if (!_boundCharacterCanEdit)
+            {
+                RefreshStatUi();
+                return;
+            }
+
             if (_boundStatState == null ||
                 string.IsNullOrWhiteSpace(statId))
             {
@@ -832,6 +992,9 @@ namespace Trpg.Pawns
         private void HandleSkillAddRequested(
             PawnSkillAddRequest request)
         {
+            if (!_boundCharacterCanEdit)
+                return;
+
             if (_boundSkillState == null)
                 return;
 
@@ -859,6 +1022,9 @@ namespace Trpg.Pawns
         private void HandleSkillNameEditRequested(
             PawnSkillNameEditRequest request)
         {
+            if (!_boundCharacterCanEdit)
+                return;
+
             if (_boundSkillState == null ||
                 !_boundSkillState.TrySetDisplayName(
                     request.SkillId,
@@ -871,6 +1037,9 @@ namespace Trpg.Pawns
         private void HandleSkillRegularEditRequested(
             PawnSkillRegularEditRequest request)
         {
+            if (!_boundCharacterCanEdit)
+                return;
+
             if (_boundSkillState == null ||
                 !_boundSkillState.TrySetRegularValue(
                     request.SkillId,
@@ -883,6 +1052,9 @@ namespace Trpg.Pawns
         private void HandleSkillRemoveRequested(
             PawnSkillRemoveRequest request)
         {
+            if (!_boundCharacterCanEdit)
+                return;
+
             if (_boundSkillState == null ||
                 !_boundSkillState.TryRemove(request.SkillId))
             {
@@ -1117,6 +1289,9 @@ namespace Trpg.Pawns
 
         private void HandleProfileRequested()
         {
+            if (!_boundSupportsProfile)
+                return;
+
             if (_boardStackManager != null)
             {
                 _boardStackManager.RequestTab(SheetTab.Profile);
@@ -1139,6 +1314,8 @@ namespace Trpg.Pawns
             _profileWidget.Bind(
                 _boundProfileState,
                 _boundDisplayName);
+            _profileWidget.SetReadOnly(
+                !_boundCharacterCanEdit);
             _profileWidget.Show(_infoBar.PortraitAnchorRect);
         }
 
@@ -1185,6 +1362,12 @@ namespace Trpg.Pawns
             PawnProfileSection section,
             string value)
         {
+            if (!_boundCharacterCanEdit)
+            {
+                _profileWidget?.RefreshFromState();
+                return;
+            }
+
             if (_boundProfileState == null)
                 return;
 
@@ -1228,6 +1411,9 @@ namespace Trpg.Pawns
 
         private void HandleInventoryRequested()
         {
+            if (!_boundSupportsInventory)
+                return;
+
             if (_boardStackManager != null)
             {
                 _boardStackManager.RequestTab(SheetTab.Bag);
@@ -1248,6 +1434,8 @@ namespace Trpg.Pawns
             }
 
             RefreshInventoryUi();
+            _inventoryWidget.SetReadOnly(
+                !_boundCharacterCanEdit);
             _inventoryWidget.Show(_infoBar.InventoryAnchorRect);
         }
 
@@ -1285,6 +1473,12 @@ namespace Trpg.Pawns
         private void HandleInventoryAddRequested(
             InventoryItemDraft draft)
         {
+            if (!_boundCharacterCanEdit)
+            {
+                RefreshInventoryUi();
+                return;
+            }
+
             if (_boundInventoryState == null)
                 return;
 
@@ -1350,6 +1544,12 @@ namespace Trpg.Pawns
 
         private void HandleInventoryRemoveRequested(string runtimeId)
         {
+            if (!_boundCharacterCanEdit)
+            {
+                RefreshInventoryUi();
+                return;
+            }
+
             if (_boundInventoryState == null)
                 return;
 
@@ -1396,6 +1596,12 @@ namespace Trpg.Pawns
             string runtimeId,
             int quantity)
         {
+            if (!_boundCharacterCanEdit)
+            {
+                RefreshInventoryUi();
+                return;
+            }
+
             if (_boundInventoryState == null)
                 return;
 
@@ -1449,6 +1655,12 @@ namespace Trpg.Pawns
             string runtimeId,
             int targetIndex)
         {
+            if (!_boundCharacterCanEdit)
+            {
+                RefreshInventoryUi();
+                return;
+            }
+
             if (_boundInventoryState == null)
                 return;
 
@@ -1590,14 +1802,117 @@ namespace Trpg.Pawns
                 capacity,
                 _itemCatalog,
                 _inventoryIconSet);
+            _inventoryWidget.SetReadOnly(
+                !_boundCharacterCanEdit);
         }
 
         private static bool IsPlayerPawn(InteractivePawn pawn)
         {
             var definition = pawn != null ? pawn.Definition : null;
-            return definition != null &&
-                   definition.Kind == InteractivePawnKind.Moveable &&
-                   definition.MoveableKind == MoveablePawnKind.Player;
+            return definition != null && definition.IsPlayer;
+        }
+
+        private static bool IsCharacterPawn(InteractivePawn pawn)
+        {
+            return pawn != null && pawn.HasStats;
+        }
+
+        private static bool IsLocalGameMasterOrOffline()
+        {
+            var authority = TRPGSessionAuthority.Instance;
+            return authority == null ||
+                   !authority.IsOnline ||
+                   authority.IsLocalGameMaster;
+        }
+
+        private static bool CanViewStats(InteractivePawn pawn)
+        {
+            if (!IsCharacterPawn(pawn) || pawn.Definition == null)
+                return false;
+
+            if (IsLocalGameMasterOrOffline())
+                return true;
+
+            var authority = TRPGSessionAuthority.Instance;
+            return pawn.Definition.IsPlayer &&
+                   authority != null &&
+                   authority.CanLocalViewFullCharacter(pawn);
+        }
+
+        private static bool CanViewMovementInformation(
+            InteractivePawn pawn)
+        {
+            if (pawn == null || pawn.Definition == null)
+                return false;
+
+            if (IsLocalGameMasterOrOffline())
+                return pawn.Definition.CanMove;
+
+            var authority = TRPGSessionAuthority.Instance;
+            return pawn.Definition.IsPlayer &&
+                   authority != null &&
+                   authority.CanLocalViewFullCharacter(pawn);
+        }
+
+        private static bool CanEditCharacter(InteractivePawn pawn)
+        {
+            if (!IsCharacterPawn(pawn))
+                return false;
+
+            var authority = TRPGSessionAuthority.Instance;
+            if (authority == null ||
+                !authority.IsOnline ||
+                authority.IsLocalGameMaster)
+            {
+                return true;
+            }
+
+            return IsPlayerPawn(pawn) &&
+                   authority.CanLocalViewFullCharacter(pawn);
+        }
+
+        private static bool CanRollCharacter(InteractivePawn pawn)
+        {
+            if (!IsCharacterPawn(pawn) || pawn.IsDead)
+                return false;
+
+            var authority = TRPGSessionAuthority.Instance;
+            return authority == null ||
+                   !authority.IsOnline ||
+                   authority.CanLocalRollPawn(pawn);
+        }
+
+        private static bool CanRerollCharacter(
+            InteractivePawn pawn)
+        {
+            if (!IsCharacterPawn(pawn) || pawn.IsDead)
+                return false;
+
+            var authority = TRPGSessionAuthority.Instance;
+            if (authority == null ||
+                !authority.IsOnline ||
+                authority.IsLocalGameMaster)
+            {
+                return true;
+            }
+
+            return IsPlayerPawn(pawn) &&
+                   authority.CanLocalViewFullCharacter(pawn);
+        }
+
+        private static bool CanMoveCharacter(InteractivePawn pawn)
+        {
+            if (pawn == null ||
+                pawn.Definition == null ||
+                !pawn.IsMoveable)
+            {
+                return false;
+            }
+
+            var authority = TRPGSessionAuthority.Instance;
+            return authority == null ||
+                   !authority.IsOnline ||
+                   authority.CanLocalMovePawn(pawn);
         }
 
         private void RefreshStatUi()
@@ -1616,7 +1931,10 @@ namespace Trpg.Pawns
                     _boundStatState.Runtime,
                     _boundSkillState,
                     _boundDisplayName,
-                    _boundPortrait);
+                    _boundPortrait,
+                    _boundCharacterCanEdit,
+                    _boundCharacterCanRoll,
+                    _boundCharacterCanReroll);
                 _infoBar.SetStats(data);
             }
             catch (Exception exception)
@@ -1630,7 +1948,10 @@ namespace Trpg.Pawns
             StatRuntimeState runtime,
             PlayerSkillState skillState,
             string displayName,
-            Sprite portrait)
+            Sprite portrait,
+            bool canEditCharacter,
+            bool canRollCharacter,
+            bool canRerollCharacter)
         {
             var definitions = new List<IStatDefinition>(
                 runtime.Template.Stats);
@@ -1648,30 +1969,55 @@ namespace Trpg.Pawns
                 StatRole.HealthMax,
                 "체력",
                 resources,
-                resourceIds);
+                resourceIds,
+                canEditCharacter);
             TryAddResource(
                 runtime,
                 StatRole.SanityCurrent,
                 StatRole.SanityMax,
                 "이성",
                 resources,
-                resourceIds);
+                resourceIds,
+                canEditCharacter);
             TryAddResource(
                 runtime,
                 StatRole.MagicCurrent,
                 StatRole.MagicMax,
                 "마력",
                 resources,
-                resourceIds);
+                resourceIds,
+                canEditCharacter);
 
             var axes = BuildAxes(
                 runtime,
                 definitions,
                 resourceIds);
+            var authority = TRPGSessionAuthority.Instance;
+            var hasUnlimitedRerolls =
+                authority == null ||
+                !authority.IsOnline ||
+                authority.IsLocalGameMaster;
+            var rerollPointsRemaining =
+                CoCStatGenerationRules.DefaultPlayerRerollPoints;
+            if (runtime.TryGetDefinition(
+                    CoCStatGenerationRules.RerollPointsStatId,
+                    out _))
+            {
+                rerollPointsRemaining =
+                    CoCStatGenerationRules.ClampPlayerRerollPoints(
+                        runtime.GetNumber(
+                            CoCStatGenerationRules.RerollPointsStatId));
+            }
+
+            var canUseStatRerolls =
+                canRerollCharacter &&
+                (hasUnlimitedRerolls || rerollPointsRemaining > 0);
             var entries = BuildEntries(
                 runtime,
                 definitions,
-                resourceIds);
+                resourceIds,
+                canEditCharacter,
+                canUseStatRerolls);
 
             var skills = BuildSkillValues(skillState);
 
@@ -1683,7 +2029,13 @@ namespace Trpg.Pawns
                 resources,
                 skills,
                 Array.Empty<PawnSkillOptionData>(),
-                skillState != null && skillState.IsInitialized);
+                canEditCharacter &&
+                skillState != null &&
+                skillState.IsInitialized,
+                canRollCharacter,
+                hasUnlimitedRerolls,
+                rerollPointsRemaining,
+                CoCStatGenerationRules.MaximumPlayerRerollPoints);
         }
 
         private static List<PawnSkillValueData> BuildSkillValues(
@@ -1805,7 +2157,9 @@ namespace Trpg.Pawns
         private static List<PawnStatEntryData> BuildEntries(
             StatRuntimeState runtime,
             IReadOnlyList<IStatDefinition> definitions,
-            ISet<string> resourceIds)
+            ISet<string> resourceIds,
+            bool canEditCharacter,
+            bool canUseStatRerolls)
         {
             var entries = new List<PawnStatEntryData>(
                 definitions.Count);
@@ -1815,7 +2169,11 @@ namespace Trpg.Pawns
             for (var index = 0; index < definitions.Count; index++)
             {
                 var definition = definitions[index];
-                if (resourceIds.Contains(definition.Id))
+                if (resourceIds.Contains(definition.Id) ||
+                    string.Equals(
+                        definition.Id,
+                        CoCStatGenerationRules.RerollPointsStatId,
+                        StringComparison.Ordinal))
                 {
                     continue;
                 }
@@ -1832,6 +2190,12 @@ namespace Trpg.Pawns
                     : 0;
                 var hard = showsDifficulty ? regular / 2 : 0;
                 var extreme = showsDifficulty ? regular / 5 : 0;
+                var hasGenerationRule =
+                    CoCStatGenerationRules.TryGetFormula(
+                        definition.Id,
+                        out var rerollFormula,
+                        out _,
+                        out _);
 
                 entries.Add(
                     new PawnStatEntryData(
@@ -1839,7 +2203,9 @@ namespace Trpg.Pawns
                         definition.DisplayName,
                         presentation.FormatValue(definition.Id),
                         value,
-                        IsEditable(definition),
+                        IsEditable(
+                            definition,
+                            canEditCharacter),
                         showsDifficulty,
                         regular,
                         hard,
@@ -1848,7 +2214,11 @@ namespace Trpg.Pawns
                         0d,
                         0d,
                         definition.MinValue,
-                        definition.MaxValue));
+                        definition.MaxValue,
+                        hasGenerationRule && canUseStatRerolls,
+                        hasGenerationRule
+                            ? rerollFormula
+                            : string.Empty));
             }
 
             return entries;
@@ -1911,7 +2281,8 @@ namespace Trpg.Pawns
             StatRole maximumRole,
             string label,
             ICollection<PawnResourceValueData> destination,
-            ISet<string> resourceIds)
+            ISet<string> resourceIds,
+            bool canEditCharacter)
         {
             var currentId = runtime.Template.GetStatId(currentRole);
             var maximumId = runtime.Template.GetStatId(maximumRole);
@@ -1939,7 +2310,9 @@ namespace Trpg.Pawns
                     out var maximumDefinition))
             {
                 maximum = runtime.GetNumber(maximumId);
-                canEditMaximum = IsEditable(maximumDefinition);
+                canEditMaximum = IsEditable(
+                    maximumDefinition,
+                    canEditCharacter);
                 resourceIds.Add(maximumId);
             }
 
@@ -1951,14 +2324,18 @@ namespace Trpg.Pawns
                     maximumId,
                     maximum,
                     true,
-                    IsEditable(currentDefinition),
+                    IsEditable(
+                        currentDefinition,
+                        canEditCharacter),
                     canEditMaximum));
             resourceIds.Add(currentId);
         }
 
-        private static bool IsEditable(IStatDefinition definition)
+        private static bool IsEditable(
+            IStatDefinition definition,
+            bool canEditCharacter)
         {
-            if (definition == null)
+            if (!canEditCharacter || definition == null)
                 return false;
 
             var authority = TRPGSessionAuthority.Instance;
@@ -2028,7 +2405,8 @@ namespace Trpg.Pawns
             float remainingMeters,
             float maximumMeters)
         {
-            if (pawn == _pawnManager.SelectedInteractive)
+            if (pawn == _pawnManager.SelectedInteractive &&
+                CanViewMovementInformation(pawn))
             {
                 _infoBar.SetMovementBudget(
                     remainingMeters,
@@ -2049,6 +2427,9 @@ namespace Trpg.Pawns
 
         private void RefreshMovementBudget(InteractivePawn pawn)
         {
+            if (!CanViewMovementInformation(pawn))
+                return;
+
             if (_pawnManager.MovementManager.TryGetMovementBudget(
                     pawn,
                     out var remaining,
@@ -2079,7 +2460,7 @@ namespace Trpg.Pawns
 
         private void RefreshWalkButton(InteractivePawn pawn)
         {
-            var canMove = pawn != null && pawn.IsMoveable;
+            var canMove = CanMoveCharacter(pawn);
             var isActive =
                 canMove &&
                 _pawnManager != null &&
@@ -2092,6 +2473,76 @@ namespace Trpg.Pawns
             {
                 _walkButton.interactable = canMove;
             }
+        }
+
+        private void HandleStatRerollRequested(
+            string statId)
+        {
+            if (!_boundCharacterCanReroll ||
+                string.IsNullOrWhiteSpace(statId))
+            {
+                return;
+            }
+
+            var pawn = _pawnManager != null
+                ? _pawnManager.SelectedInteractive
+                : null;
+            if (pawn == null || pawn.Definition == null)
+                return;
+
+            var authority = TRPGSessionAuthority.Instance;
+            if (authority != null)
+            {
+                if (!authority.RequestCocStatReroll(
+                        pawn,
+                        statId))
+                {
+                    RefreshStatUi();
+                }
+                return;
+            }
+
+            if (!CoCStatGenerationRules.TryRoll(
+                    statId,
+                    out var result,
+                    out var expression,
+                    out var minimum,
+                    out var maximum) ||
+                _boundStatState == null ||
+                !TryGetDisplayedStatValue(
+                    _boundStatState,
+                    statId,
+                    out var previousValue) ||
+                !_boundStatState.TrySetAuthoritativeDisplayedValue(
+                    statId,
+                    result))
+            {
+                return;
+            }
+
+            var title =
+                CoCStatGenerationRules.GetAbbreviation(statId) +
+                " 재굴림";
+            var presentation = new PawnRollPresentationData(
+                title,
+                expression,
+                result,
+                minimum,
+                maximum,
+                result.ToString(),
+                $"{previousValue:0} → {result}",
+                new Color(0.78f, 0.60f, 1f, 1f),
+                1.35f);
+            PawnRollLogService.RecordRoll(
+                PawnRollLogKind.Effect,
+                pawn,
+                presentation.Title,
+                presentation.Expression,
+                presentation.FinalValue,
+                presentation.ResultLabel,
+                presentation.DetailLabel);
+            _infoBar?.PlayRoll(presentation);
+            RefreshStatUi();
         }
 
         private void HandleCheckRollRequested(
@@ -2182,15 +2633,18 @@ namespace Trpg.Pawns
         private void HandleRollPresentationCompleted()
         {
             _isRollInProgress = false;
+            var selected = _pawnManager != null
+                ? _pawnManager.SelectedInteractive
+                : null;
             _infoBar.SetRollButtonsEnabled(
-                _pawnManager.SelectedInteractive != null &&
-                _pawnManager.SelectedInteractive.Definition != null);
+                selected != null && CanRollCharacter(selected));
         }
 
         private bool TryBeginRoll(out InteractivePawn pawn)
         {
             pawn = _pawnManager.SelectedInteractive;
             if (_isRollInProgress ||
+                !_boundCharacterCanRoll ||
                 pawn == null ||
                 pawn.Definition == null)
             {
@@ -2224,7 +2678,11 @@ namespace Trpg.Pawns
             _infoBar.CancelRollPresentation();
 
             var hasPawn = pawn != null && pawn.Definition != null;
-            _infoBar.SetRollButtonsEnabled(hasPawn);
+            var canRoll = hasPawn && CanRollCharacter(pawn);
+            _boundCharacterCanRoll = canRoll;
+            _boundCharacterCanReroll =
+                hasPawn && CanRerollCharacter(pawn);
+            _infoBar.SetRollButtonsEnabled(canRoll);
             if (!hasPawn)
             {
                 return;

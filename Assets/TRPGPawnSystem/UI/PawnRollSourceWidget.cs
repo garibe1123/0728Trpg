@@ -32,7 +32,9 @@ namespace Trpg.Pawns
 
         // 기존 Manager API 호환용입니다. 판정 소스는 클릭으로 선택하지
         // 않고 드래그 앤 드롭으로만 전달합니다.
+#pragma warning disable CS0067
         public static event Action<PawnCheckSourceData> SourceSelected;
+#pragma warning restore CS0067
         public static event Action<PawnCheckSourceData> DragStarted;
         public static event Action DragEnded;
 

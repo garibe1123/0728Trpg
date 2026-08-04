@@ -58,6 +58,7 @@ namespace Trpg.Pawns
             if (!ShouldRouteClientProfileChange ||
                 !IsGameplayReady ||
                 pawn == null ||
+                !pawn.HasFullCharacterSheet ||
                 pawn.Definition == null ||
                 !IsValidProfileSection(section))
             {
@@ -93,6 +94,7 @@ namespace Trpg.Pawns
             if (!IsLocalGameMaster ||
                 !Object.HasStateAuthority ||
                 pawn == null ||
+                !pawn.HasFullCharacterSheet ||
                 pawn.Definition == null ||
                 !IsValidProfileSection(section))
             {
@@ -221,8 +223,11 @@ namespace Trpg.Pawns
                 return;
             }
 
-            if (!TryResolvePawnByDefinitionId(pawnId, out var pawn))
+            if (!TryResolvePawnByDefinitionId(pawnId, out var pawn) ||
+                !pawn.HasFullCharacterSheet)
+            {
                 return;
+            }
 
             var state = PawnProfileState.ResolveOrCreate(
                 pawn.gameObject,
@@ -251,6 +256,7 @@ namespace Trpg.Pawns
         {
             if (target == PlayerRef.None ||
                 pawn == null ||
+                !pawn.HasFullCharacterSheet ||
                 pawn.Definition == null)
             {
                 return;

@@ -157,6 +157,7 @@ namespace Trpg.Pawns
         private bool _canEdit;
         private int _usedVisualCount;
         private bool _isEmbedded;
+        private bool _rollInteractionAllowed = true;
         private Transform _legacyParent;
         private Vector2 _legacyAnchorMin;
         private Vector2 _legacyAnchorMax;
@@ -329,13 +330,22 @@ namespace Trpg.Pawns
             Hide(false);
         }
 
+        public void SetRollInteractionEnabled(bool enabled)
+        {
+            _rollInteractionAllowed = enabled;
+            SetRollSourceInteraction(
+                _isEmbedded && _isExpanded);
+        }
+
         private void SetRollSourceInteraction(bool enabled)
         {
+            var allowInteraction =
+                enabled && _rollInteractionAllowed;
             for (var index = 0; index < _visuals.Count; index++)
             {
                 var source = _visuals[index].RollSource;
                 if (source != null)
-                    source.SetInteractionEnabled(enabled);
+                    source.SetInteractionEnabled(allowInteraction);
             }
         }
 
@@ -806,7 +816,8 @@ namespace Trpg.Pawns
                 hard,
                 extreme);
             visual.RollSource.Bind(source);
-            visual.RollSource.SetInteractionEnabled(_isEmbedded);
+            visual.RollSource.SetInteractionEnabled(
+                _isEmbedded && _rollInteractionAllowed);
 
             var unavailable =
                 data.UsesBaseValue && data.RequiresTraining;
