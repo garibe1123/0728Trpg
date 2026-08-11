@@ -58,6 +58,17 @@ namespace Trpg.Pawns
         private float _lastMovementFacingX;
         private bool _selectedForPresentation;
 
+        // FieldPawn Sort Anchor가 실제 Pawn Visual의 정렬을 덮어쓸 때 사용합니다.
+        // ModularCharacter는 PawnSpriteAnimator/PawnSpriteRig로 전달하고,
+        // SimpleSprite는 실제 SpriteRenderer에 직접 적용합니다.
+        private bool _hasWorldSortOverride;
+        private int _worldSortLayerId;
+        private int _worldSortReferenceOrder;
+        private bool _worldSortInFront;
+        private float _simpleVisualSortingBandsPerWorldUnit = 4f;
+        private int _simpleVisualDefaultSortingLayerId;
+        private bool _hasSimpleVisualDefaultSortingLayer;
+
         public event Action<InteractivePawn> MovementPresentationCompleted;
         public event Action<InteractivePawn, InteractivePawn> DoorEntered;
         public event Action<InteractivePawn> RuntimeStateChanged;
@@ -157,6 +168,7 @@ namespace Trpg.Pawns
         {
             KillMovementTween();
             SetSelected(false);
+            SetWorldSortOverride(false, 0, 0, true);
             MovementPresentationCompleted = null;
             DoorEntered = null;
             base.Unbind();
@@ -568,7 +580,14 @@ namespace Trpg.Pawns
                     }
 
                     if (Application.isPlaying)
+                    {
                         manager?.RegisterModularPawn(this);
+                        animator?.SetWorldSortOverride(
+                            _hasWorldSortOverride,
+                            _worldSortLayerId,
+                            _worldSortReferenceOrder,
+                            _worldSortInFront);
+                    }
 #if UNITY_EDITOR
                     else if (animator != null)
                     {
@@ -607,15 +626,93 @@ namespace Trpg.Pawns
 
         public void UpdateSimpleVisualSorting(float bandsPerWorldUnit)
         {
+            _simpleVisualSortingBandsPerWorldUnit = Mathf.Max(
+                0.01f,
+                bandsPerWorldUnit);
+
             if (!UsesSimpleSpriteVisual || _simpleVisualRenderer == null)
                 return;
 
+            if (!_hasSimpleVisualDefaultSortingLayer)
+            {
+                _simpleVisualDefaultSortingLayerId =
+                    _simpleVisualRenderer.sortingLayerID;
+                _hasSimpleVisualDefaultSortingLayer = true;
+            }
+
+            if (_hasWorldSortOverride)
+            {
+                _simpleVisualRenderer.sortingLayerID =
+                    _worldSortLayerId;
+                _simpleVisualRenderer.sortingOrder =
+                    _worldSortInFront
+                        ? SafeOffsetOrder(
+                            _worldSortReferenceOrder,
+                            1)
+                        : SafeOffsetOrder(
+                            _worldSortReferenceOrder,
+                            -1);
+                return;
+            }
+
+            _simpleVisualRenderer.sortingLayerID =
+                _simpleVisualDefaultSortingLayerId;
             var worldY = _simpleVisualRenderer.transform.position.y;
             var yBand = PawnSpriteRig.CalculateSortingBand(
                 worldY,
-                bandsPerWorldUnit);
+                _simpleVisualSortingBandsPerWorldUnit);
             _simpleVisualRenderer.sortingOrder =
                 yBand * PawnSpriteRig.SortingBandSize + 64;
+        }
+
+        /// <summary>
+        /// FieldPawn Sort Anchor 기준으로 실제 Pawn Visual의 정렬을 덮어씁니다.
+        /// enabled=false이면 Pawn 고유의 Y Sorting으로 복귀합니다.
+        /// </summary>
+        public void SetWorldSortOverride(
+            bool enabled,
+            int sortingLayerId,
+            int referenceOrder,
+            bool inFront)
+        {
+            _hasWorldSortOverride = enabled;
+            _worldSortLayerId = sortingLayerId;
+            _worldSortReferenceOrder = referenceOrder;
+            _worldSortInFront = inFront;
+
+            var animator = GetComponent<PawnSpriteAnimator>();
+            if (UsesModularSpriteMotion)
+            {
+                if (animator == null && Application.isPlaying)
+                    animator = EnsureModularSpriteAnimator();
+
+                animator?.SetWorldSortOverride(
+                    enabled,
+                    sortingLayerId,
+                    referenceOrder,
+                    inFront);
+                return;
+            }
+
+            // VisualMode가 바뀌었을 때 pooled Modular Rig에 override가 남지 않게 합니다.
+            animator?.SetWorldSortOverride(false, 0, 0, true);
+
+            if (!UsesSimpleSpriteVisual)
+                return;
+
+            EnsureSimpleVisualRenderer();
+            UpdateSimpleVisualSorting(
+                _simpleVisualSortingBandsPerWorldUnit);
+        }
+
+        private static int SafeOffsetOrder(int value, int offset)
+        {
+            var result = (long)value + offset;
+            if (result > int.MaxValue)
+                return int.MaxValue;
+            if (result < int.MinValue)
+                return int.MinValue;
+            return (int)result;
         }
 
         private void EnsureSimpleVisualRenderer()
@@ -654,6 +751,13 @@ namespace Trpg.Pawns
                 _simpleVisualRenderer =
                     existing.gameObject.AddComponent<SpriteRenderer>();
 
+            if (!_hasSimpleVisualDefaultSortingLayer)
+            {
+                _simpleVisualDefaultSortingLayerId =
+                    _simpleVisualRenderer.sortingLayerID;
+                _hasSimpleVisualDefaultSortingLayer = true;
+            }
+
             if (_visualRoot == null || _visualRoot == transform)
                 _visualRoot = existing;
             _visualRestLocalPosition = Vector3.zero;
@@ -682,6 +786,7 @@ namespace Trpg.Pawns
 
             _simpleVisualObject = null;
             _simpleVisualRenderer = null;
+            _hasSimpleVisualDefaultSortingLayer = false;
         }
 
         private void InvalidateRuntimeRenderers()

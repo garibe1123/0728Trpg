@@ -14,6 +14,7 @@ namespace Trpg.Pawns
         private readonly SpriteRenderer[] _renderers;
         private readonly Material[] _defaultRendererMaterials;
         private readonly Material[] _restoredMaterials;
+        private readonly int[] _defaultSortingLayerIds;
         private PawnAppearance _appearance;
         private bool _isSelected;
         private Material _selectionMaterialTemplate;
@@ -22,6 +23,13 @@ namespace Trpg.Pawns
         private readonly int _pixelsPerUnit;
         private float _presentationScale = 1f;
         private bool _facingLeft;
+        private int _currentSortingBand;
+        private bool _hasWorldSortOverride;
+        private int _worldSortLayerId;
+        private int _worldSortReferenceOrder;
+        private bool _worldSortInFront;
+        private int _minimumPartSortingOrder = int.MaxValue;
+        private int _maximumPartSortingOrder = int.MinValue;
 
         public PawnSpriteAnimator Owner { get; private set; }
         public GameObject RootObject => _rootObject;
@@ -54,8 +62,13 @@ namespace Trpg.Pawns
             _renderers = new SpriteRenderer[count];
             _defaultRendererMaterials = new Material[count];
             _restoredMaterials = new Material[count];
+            _defaultSortingLayerIds = new int[count];
 
             CreateSlots(hideFlags);
+            if (_minimumPartSortingOrder == int.MaxValue)
+                _minimumPartSortingOrder = 0;
+            if (_maximumPartSortingOrder == int.MinValue)
+                _maximumPartSortingOrder = 0;
             ApplyFixedHierarchy();
             SetVisible(false);
         }
@@ -72,7 +85,12 @@ namespace Trpg.Pawns
             _facingLeft = owner != null &&
                           owner.Pawn != null &&
                           owner.Pawn.FacingLeft;
+            _hasWorldSortOverride = false;
+            _worldSortLayerId = 0;
+            _worldSortReferenceOrder = 0;
+            _worldSortInFront = false;
             ApplyRootScale();
+            ApplySortingOrders();
             ApplyAppearance(appearance);
             SetVisible(true);
         }
@@ -85,7 +103,12 @@ namespace Trpg.Pawns
             _selectionMaterial = null;
             _presentationScale = 1f;
             _facingLeft = false;
+            _hasWorldSortOverride = false;
+            _worldSortLayerId = 0;
+            _worldSortReferenceOrder = 0;
+            _worldSortInFront = false;
             ApplyRootScale();
+            ApplySortingOrders();
             SetVisible(false);
             _rootTransform.localPosition = Vector3.zero;
             _rootTransform.localRotation = Quaternion.identity;
@@ -179,6 +202,50 @@ namespace Trpg.Pawns
             ApplyRootScale();
         }
 
+        /// <summary>
+        /// Pawn의 월드 Sorting Band는 그대로 유지하고,
+        /// 캐릭터 내부 파츠만 Head를 0으로 한 1단위 상대 순서로 정렬합니다.
+        ///
+        /// Hat +2
+        /// HairFront +1
+        /// Head 0
+        /// Eyes -1
+        /// Top -2
+        /// Torso -3
+        /// Shoes -4
+        /// Bottom -5
+        /// Legs -6
+        /// HairBack -7
+        /// </summary>
+        private static int GetRigPartSortingOffset(PartSlot slot)
+        {
+            switch (slot)
+            {
+                case PartSlot.HairBack:
+                    return -7;
+                case PartSlot.Legs:
+                    return -6;
+                case PartSlot.Bottom:
+                    return -5;
+                case PartSlot.Shoes:
+                    return -4;
+                case PartSlot.Torso:
+                    return -3;
+                case PartSlot.Top:
+                    return -2;
+                case PartSlot.Eyes:
+                    return -1;
+                case PartSlot.Head:
+                    return 0;
+                case PartSlot.HairFront:
+                    return 1;
+                case PartSlot.Hat:
+                    return 2;
+                default:
+                    return 0;
+            }
+        }
+
         public static int CalculateSortingBand(
             float worldY,
             float bandsPerWorldUnit)
@@ -198,7 +265,54 @@ namespace Trpg.Pawns
 
         public void SetSortingBand(int yBand)
         {
-            var baseOrder = yBand * SortingBandSize;
+            _currentSortingBand = yBand;
+            ApplySortingOrders();
+        }
+
+        /// <summary>
+        /// FieldPawn의 실제 sortingLayer/order를 기준으로 이 Rig 전체를
+        /// 앞 또는 뒤에 배치합니다. 파츠 내부 순서는 그대로 보존됩니다.
+        /// </summary>
+        public void SetWorldSortOverride(
+            int sortingLayerId,
+            int referenceOrder,
+            bool inFront)
+        {
+            _hasWorldSortOverride = true;
+            _worldSortLayerId = sortingLayerId;
+            _worldSortReferenceOrder = referenceOrder;
+            _worldSortInFront = inFront;
+            ApplySortingOrders();
+        }
+
+        public void ClearWorldSortOverride()
+        {
+            if (!_hasWorldSortOverride)
+                return;
+
+            _hasWorldSortOverride = false;
+            ApplySortingOrders();
+        }
+
+        private void ApplySortingOrders()
+        {
+            long baseOrder;
+            if (_hasWorldSortOverride)
+            {
+                // 모든 파츠가 건물보다 확실히 앞/뒤가 되도록
+                // 파츠 offset의 최소/최대값까지 고려해 baseOrder를 잡습니다.
+                baseOrder = _worldSortInFront
+                    ? (long)_worldSortReferenceOrder + 1 -
+                      _minimumPartSortingOrder
+                    : (long)_worldSortReferenceOrder - 1 -
+                      _maximumPartSortingOrder;
+            }
+            else
+            {
+                baseOrder = (long)_currentSortingBand *
+                            SortingBandSize;
+            }
+
             for (var slotIndex = 0;
                  slotIndex < (int)PartSlot.Count;
                  slotIndex++)
@@ -207,10 +321,24 @@ namespace Trpg.Pawns
                 if (renderer == null)
                     continue;
 
+                renderer.sortingLayerID = _hasWorldSortOverride
+                    ? _worldSortLayerId
+                    : _defaultSortingLayerIds[slotIndex];
+
                 var slot = (PartSlot)slotIndex;
-                renderer.sortingOrder = baseOrder +
-                    PawnPartSlotRules.GetSortingOrder(slot);
+                var partOrder = GetRigPartSortingOffset(slot);
+                renderer.sortingOrder = ClampSortingOrder(
+                    baseOrder + partOrder);
             }
+        }
+
+        private static int ClampSortingOrder(long value)
+        {
+            if (value > int.MaxValue)
+                return int.MaxValue;
+            if (value < int.MinValue)
+                return int.MinValue;
+            return (int)value;
         }
 
         public void SetFacingLeft(bool facingLeft)
@@ -298,6 +426,15 @@ namespace Trpg.Pawns
                 _slotTransforms[slotIndex] = childTransform;
                 _renderers[slotIndex] = renderer;
                 _defaultRendererMaterials[slotIndex] = renderer.sharedMaterial;
+                _defaultSortingLayerIds[slotIndex] = renderer.sortingLayerID;
+
+                var partOrder = GetRigPartSortingOffset(slot);
+                _minimumPartSortingOrder = Mathf.Min(
+                    _minimumPartSortingOrder,
+                    partOrder);
+                _maximumPartSortingOrder = Mathf.Max(
+                    _maximumPartSortingOrder,
+                    partOrder);
             }
         }
 

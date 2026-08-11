@@ -30,6 +30,10 @@ namespace Trpg.Pawns
         private int _pixelsPerUnit = PixelSnap.DefaultPixelsPerUnit;
         private float _sortingBandsPerWorldUnit = 4f;
         private bool _legacyHidden;
+        private bool _hasWorldSortOverride;
+        private int _worldSortLayerId;
+        private int _worldSortReferenceOrder;
+        private bool _worldSortInFront;
 
         public InteractivePawn Pawn => EnsurePawn();
         public bool UsesDefinitionAppearance => _useDefinitionAppearance;
@@ -76,6 +80,10 @@ namespace Trpg.Pawns
             _pixelsPerUnit = PixelSnap.DefaultPixelsPerUnit;
             _sortingBandsPerWorldUnit = 4f;
             _lastKey = -1;
+            _hasWorldSortOverride = false;
+            _worldSortLayerId = 0;
+            _worldSortReferenceOrder = 0;
+            _worldSortInFront = false;
             SetLegacyRenderersHidden(false);
         }
 
@@ -96,6 +104,7 @@ namespace Trpg.Pawns
                 _selected,
                 _selectionMaterial,
                 _selectedScale);
+            ApplyWorldSortOverrideToRig(_runtimeRig);
             _lastKey = -1;
         }
 
@@ -118,6 +127,37 @@ namespace Trpg.Pawns
             rig.Release();
         }
 
+        public void SetWorldSortOverride(
+            bool enabled,
+            int sortingLayerId,
+            int referenceOrder,
+            bool inFront)
+        {
+            _hasWorldSortOverride = enabled;
+            _worldSortLayerId = sortingLayerId;
+            _worldSortReferenceOrder = referenceOrder;
+            _worldSortInFront = inFront;
+            ApplyWorldSortOverrideToRig(_runtimeRig);
+        }
+
+        private void ApplyWorldSortOverrideToRig(PawnSpriteRig rig)
+        {
+            if (rig == null)
+                return;
+
+            if (_hasWorldSortOverride)
+            {
+                rig.SetWorldSortOverride(
+                    _worldSortLayerId,
+                    _worldSortReferenceOrder,
+                    _worldSortInFront);
+            }
+            else
+            {
+                rig.ClearWorldSortOverride();
+            }
+        }
+
         public void UpdateRuntimeVisual(float time)
         {
             if (_runtimeRig == null || !IsModularEnabled)
@@ -129,6 +169,7 @@ namespace Trpg.Pawns
                 PawnSpriteRig.CalculateSortingBand(
                     position.y,
                     _sortingBandsPerWorldUnit));
+            ApplyWorldSortOverrideToRig(_runtimeRig);
 
             var motion = EffectiveIdleMotion;
             var key = motion != null
