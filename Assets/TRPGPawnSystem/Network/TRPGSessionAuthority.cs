@@ -92,6 +92,8 @@ namespace Trpg.Pawns
         public byte ColorAlpha;
         public NetworkBool ShowRoulette;
         public NetworkBool AnimateRoulette;
+        public int Visibility;
+        public PlayerRef Roller;
     }
 
     public struct TRPGPlayerSlotState : INetworkStruct
@@ -158,6 +160,9 @@ namespace Trpg.Pawns
 
         [Networked]
         public NetworkBool GameplayReady { get; set; }
+
+        [Networked]
+        public int CampaignRuleSetValue { get; set; }
 
         private readonly List<TRPGNetworkMovePacket> _pendingMovePackets =
             new List<TRPGNetworkMovePacket>();
@@ -332,6 +337,10 @@ namespace Trpg.Pawns
             _localReferencesReady = false;
             TRPGNetworkBootstrap.RegisterAuthority(this);
             ResolveLocalReferences();
+            if (Object.HasStateAuthority && _pawnUiManager != null)
+            {
+                CampaignRuleSetValue = (int)_pawnUiManager.RuleSet;
+            }
             BindLogEvents();
             BeginInitialization();
 
@@ -378,6 +387,8 @@ namespace Trpg.Pawns
             if (stateChanged || gameplayChanged)
                 PublishStateChanged();
 
+            ApplyNetworkCampaignRuleSet();
+
             if (!Object.HasStateAuthority &&
                 GameplayReady &&
                 _localReferencesReady &&
@@ -387,6 +398,34 @@ namespace Trpg.Pawns
                 PawnRollLogService.ClearAll();
                 RPC_RequestGameplaySnapshot();
             }
+        }
+
+        public void PublishHostCampaignRuleSet(
+            CampaignRuleSet ruleSet)
+        {
+            if (!IsLocalGameMaster ||
+                !Object.HasStateAuthority)
+            {
+                return;
+            }
+
+            CampaignRuleSetValue = (int)ruleSet;
+            GameplayRevision++;
+        }
+
+        private void ApplyNetworkCampaignRuleSet()
+        {
+            if (_pawnUiManager == null ||
+                !Enum.IsDefined(
+                    typeof(CampaignRuleSet),
+                    CampaignRuleSetValue))
+            {
+                return;
+            }
+
+            var ruleSet = (CampaignRuleSet)CampaignRuleSetValue;
+            if (_pawnUiManager.RuleSet != ruleSet)
+                _pawnUiManager.ApplyCampaignRuleSet(ruleSet);
         }
 
         public void ConfigureGameplayReferences(
@@ -1234,13 +1273,41 @@ namespace Trpg.Pawns
 
             ApplyRemoteLog(packet, true);
             AddHostHistory(packet);
-            RPC_BroadcastLog(packet);
+            if (IsSecretPacket(packet))
+            {
+                if (info.Source != PlayerRef.None &&
+                    info.Source != Runner.LocalPlayer)
+                {
+                    RPC_PrivateLog(info.Source, packet);
+                }
+            }
+            else
+            {
+                RPC_BroadcastLog(packet);
+            }
         }
 
         [Rpc(
             RpcSources.StateAuthority,
             RpcTargets.All)]
         private void RPC_BroadcastLog(TRPGNetworkLogPacket packet)
+        {
+            if (Object.HasStateAuthority)
+                return;
+
+            var eventId = packet.EventId.ToString();
+            if (_pendingLocalLogEventIds.Remove(eventId))
+                return;
+
+            ApplyRemoteLog(packet, true);
+        }
+
+        [Rpc(
+            RpcSources.StateAuthority,
+            RpcTargets.All)]
+        private void RPC_PrivateLog(
+            [RpcTarget] PlayerRef target,
+            TRPGNetworkLogPacket packet)
         {
             if (Object.HasStateAuthority)
                 return;
@@ -1523,6 +1590,7 @@ namespace Trpg.Pawns
             PawnRollLogEntry entry)
         {
             if (_applyingRemoteLog ||
+                PawnRollLogService.IsRestoringSnapshot ||
                 !IsGameplayReady ||
                 entry.Sequence <= 0)
             {
@@ -1575,7 +1643,8 @@ namespace Trpg.Pawns
             if (Object.HasStateAuthority)
             {
                 AddHostHistory(packet);
-                RPC_BroadcastLog(packet);
+                if (!IsSecretPacket(packet))
+                    RPC_BroadcastLog(packet);
                 return;
             }
 
@@ -1695,7 +1764,11 @@ namespace Trpg.Pawns
                 SendStatSnapshotTo(target, pawn);
                 SendInventorySnapshotTo(target, pawn);
                 SendProfileSnapshotTo(target, pawn);
+                SendSkillSnapshotTo(target, pawn);
+                SendSanityStateSnapshotTo(target, pawn);
             }
+
+            SendHandoutSnapshotTo(target);
         }
 
         private void SendStatSnapshotTo(
@@ -1751,6 +1824,59 @@ namespace Trpg.Pawns
             }
         }
 
+        public void PublishHostRollLogSnapshot()
+        {
+            if (!IsLocalGameMaster ||
+                !Object.HasStateAuthority ||
+                !IsGameplayReady)
+            {
+                return;
+            }
+
+            _hostLogHistory.Clear();
+            RPC_ResetRollLog();
+
+            var entries = PawnRollLogService.Entries;
+            for (var index = 0; index < entries.Count; index++)
+            {
+                var entry = entries[index];
+                var packet = CreateLogPacket(entry, false);
+
+                if (IsSecretPacket(packet) &&
+                    TryGetControllingPlayer(entry.Pawn, out var target))
+                {
+                    packet.Roller = target;
+                    AddHostHistory(packet);
+                    RPC_PrivateLog(target, packet);
+                    continue;
+                }
+
+                // GM 전용 NPC 비밀 굴림은 다른 클라이언트에 보내지 않습니다.
+                AddHostHistory(packet);
+                if (!IsSecretPacket(packet))
+                    RPC_BroadcastLog(packet);
+            }
+        }
+
+        [Rpc(
+            RpcSources.StateAuthority,
+            RpcTargets.All)]
+        private void RPC_ResetRollLog()
+        {
+            if (Object.HasStateAuthority)
+                return;
+
+            _applyingRemoteLog = true;
+            try
+            {
+                PawnRollLogService.ClearAll();
+            }
+            finally
+            {
+                _applyingRemoteLog = false;
+            }
+        }
+
         private void SendLogHistoryTo(PlayerRef target)
         {
             for (var index = 0;
@@ -1758,6 +1884,8 @@ namespace Trpg.Pawns
                  index++)
             {
                 var packet = _hostLogHistory[index];
+                if (IsSecretPacket(packet) && packet.Roller != target)
+                    continue;
                 packet.ShowRoulette = false;
                 RPC_ApplyHistoryEntry(target, packet);
             }
@@ -2015,6 +2143,12 @@ namespace Trpg.Pawns
                 return true;
             }
 
+            packet.Roller = source;
+            packet.Visibility = packet.Visibility ==
+                (int)RollVisibility.RollerAndGameMaster
+                    ? (int)RollVisibility.RollerAndGameMaster
+                    : (int)RollVisibility.Public;
+
             var kind = (PawnRollLogKind)packet.Kind;
             if (kind == PawnRollLogKind.System)
             {
@@ -2200,6 +2334,20 @@ namespace Trpg.Pawns
             {
                 return false;
             }
+        }
+
+        public void PublishHostMovementSnapshot(
+            InteractivePawn pawn)
+        {
+            if (!IsLocalGameMaster ||
+                _applyingRemoteState ||
+                pawn == null)
+            {
+                return;
+            }
+
+            GameplayRevision++;
+            PublishMovementBudgetSnapshot(pawn);
         }
 
         private void PublishMovementBudgetSnapshot(
@@ -2439,7 +2587,11 @@ namespace Trpg.Pawns
                 ColorBlue = color.b,
                 ColorAlpha = color.a,
                 ShowRoulette = showRoulette,
-                AnimateRoulette = showRoulette
+                AnimateRoulette = showRoulette,
+                Visibility = (int)entry.Visibility,
+                Roller = Runner != null
+                    ? Runner.LocalPlayer
+                    : PlayerRef.None
             };
         }
 
@@ -2500,8 +2652,19 @@ namespace Trpg.Pawns
                 ColorBlue = color.b,
                 ColorAlpha = color.a,
                 ShowRoulette = true,
-                AnimateRoulette = animate
+                AnimateRoulette = animate,
+                Visibility = (int)RollVisibility.Public,
+                Roller = Runner != null
+                    ? Runner.LocalPlayer
+                    : PlayerRef.None
             };
+        }
+
+        private static bool IsSecretPacket(
+            TRPGNetworkLogPacket packet)
+        {
+            return packet.Visibility ==
+                   (int)RollVisibility.RollerAndGameMaster;
         }
 
         private void AddHostHistory(
@@ -2531,7 +2694,11 @@ namespace Trpg.Pawns
                     packet.Expression.ToString(),
                     packet.Value,
                     packet.Result.ToString(),
-                    packet.Detail.ToString());
+                    packet.Detail.ToString(),
+                    packet.Visibility ==
+                    (int)RollVisibility.RollerAndGameMaster
+                        ? RollVisibility.RollerAndGameMaster
+                        : RollVisibility.Public);
             }
             finally
             {

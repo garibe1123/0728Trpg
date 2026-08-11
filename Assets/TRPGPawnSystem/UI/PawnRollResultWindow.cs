@@ -197,8 +197,8 @@ namespace Trpg.Pawns
             SetText(
                 _challengeButtonText,
                 challengeAvailable
-                    ? "대항한다"
-                    : "대항 사용 완료");
+                    ? "강행한다"
+                    : "강행 사용 완료");
             SetText(
                 _luckButtonText,
                 luckCost > 0
@@ -628,7 +628,7 @@ namespace Trpg.Pawns
             _challengeButton = CreateButton(
                 "Challenge",
                 _failureActionsRect,
-                "대항한다",
+                "강행한다",
                 new Color(0.34f, 0.19f, 0.03f, 1f));
             _luckButton = CreateButton(
                 "Luck",

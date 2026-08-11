@@ -26,7 +26,7 @@ namespace Trpg.Save
 
     public sealed class CampaignSaveService
     {
-        public const int CurrentSchemaVersion = 2;
+        public const int CurrentSchemaVersion = 3;
         private const int MaximumSaveNameLength = 40;
         private const string SaveExtension = ".json";
 

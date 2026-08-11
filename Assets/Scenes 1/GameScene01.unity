@@ -153,6 +153,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   _settings: {fileID: 11400000, guid: 8413faebbb41b9946a5cc9726257ec25, type: 2}
   _navMeshManager: {fileID: 1110454311}
+  _rebuildNavMeshWhenMoverActivated: 1
   _interactiveDestinationClearanceMeters: 0.25
 --- !u!4 &93580603
 Transform:
@@ -340,6 +341,7 @@ GameObject:
   - component: {fileID: 363143312}
   - component: {fileID: 363143311}
   - component: {fileID: 363143313}
+  - component: {fileID: 363143314}
   m_Layer: 0
   m_Name: PlayerPawn
   m_TagString: Untagged
@@ -426,6 +428,10 @@ MonoBehaviour:
   _linkedDoorInstanceId: 
   _arrivalPoint: {fileID: 0}
   _doorTrigger: {fileID: 0}
+  _isHidden: 0
+  _isDead: 0
+  _facingLeft: 0
+  _facingInitialized: 0
 --- !u!212 &363143313
 SpriteRenderer:
   m_ObjectHideFlags: 0
@@ -470,7 +476,7 @@ SpriteRenderer:
   m_SortingLayerID: 0
   m_SortingLayer: 0
   m_SortingOrder: 0
-  m_Sprite: {fileID: 21300000, guid: 51e1ed3ea5905b84aafe74a0d24fa5f1, type: 3}
+  m_Sprite: {fileID: 0}
   m_Color: {r: 1, g: 1, b: 1, a: 1}
   m_FlipX: 0
   m_FlipY: 0
@@ -478,9 +484,45 @@ SpriteRenderer:
   m_Size: {x: 0.16, y: 0.16}
   m_AdaptiveModeThreshold: 0.5
   m_SpriteTileMode: 0
-  m_WasSpriteAssigned: 1
+  m_WasSpriteAssigned: 0
   m_MaskInteraction: 0
   m_SpriteSortPoint: 0
+--- !u!114 &363143314
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 363143309}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 8e74c5c09566f624f8dbb49fec82bbe6, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  _useDefinitionAppearance: 1
+  _appearance:
+    _height: 0
+    _broadShoulders: 0
+    _headId: 0
+    _hairFrontId: 255
+    _hairBackId: 255
+    _hatId: 255
+    _topId: 255
+    _bottomId: 255
+    _shoesId: 255
+    _eyesId: 0
+    _legsId: 0
+    _portraitId: 0
+    _skinColor:
+      serializedVersion: 2
+      rgba: 4287934176
+    _hairColor:
+      serializedVersion: 2
+      rgba: 4281154158
+    _eyeColor:
+      serializedVersion: 2
+      rgba: 4284110893
+  _idleMotionOverride: {fileID: 11400000, guid: 63a8865d06d7f7e4aa8cdeccf587b7d7, type: 2}
 --- !u!1 &470943559
 GameObject:
   m_ObjectHideFlags: 0
@@ -641,7 +683,7 @@ Camera:
   m_Enabled: 1
   serializedVersion: 2
   m_ClearFlags: 2
-  m_BackGroundColor: {r: 0.19215687, g: 0.3019608, b: 0.4745098, a: 0}
+  m_BackGroundColor: {r: 0, g: 0, b: 0, a: 0}
   m_projectionMatrixMode: 1
   m_GateFitMode: 2
   m_FOVAxisMode: 0
@@ -1115,6 +1157,7 @@ MonoBehaviour:
   _GameplayRevision: 0
   _GameplayReady:
     RawValue: 0
+  _CampaignRuleSetValue: 0
 --- !u!114 &730722595
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1194,6 +1237,7 @@ GameObject:
   - component: {fileID: 742006254}
   - component: {fileID: 742006253}
   - component: {fileID: 742006252}
+  - component: {fileID: 742006255}
   m_Layer: 0
   m_Name: Monster01
   m_TagString: Untagged
@@ -1260,7 +1304,7 @@ SpriteRenderer:
   m_SortingLayerID: 0
   m_SortingLayer: 0
   m_SortingOrder: 0
-  m_Sprite: {fileID: 21300000, guid: 6e142000690956a4eb2efa66fcc173b5, type: 3}
+  m_Sprite: {fileID: 0}
   m_Color: {r: 1, g: 1, b: 1, a: 1}
   m_FlipX: 0
   m_FlipY: 0
@@ -1268,7 +1312,7 @@ SpriteRenderer:
   m_Size: {x: 0.16, y: 0.16}
   m_AdaptiveModeThreshold: 0.5
   m_SpriteTileMode: 0
-  m_WasSpriteAssigned: 1
+  m_WasSpriteAssigned: 0
   m_MaskInteraction: 0
   m_SpriteSortPoint: 0
 --- !u!61 &742006253
@@ -1335,6 +1379,46 @@ MonoBehaviour:
   _linkedDoorInstanceId: 
   _arrivalPoint: {fileID: 0}
   _doorTrigger: {fileID: 0}
+  _isHidden: 0
+  _isDead: 0
+  _facingLeft: 0
+  _facingInitialized: 0
+--- !u!114 &742006255
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 742006250}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 8e74c5c09566f624f8dbb49fec82bbe6, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  _useDefinitionAppearance: 1
+  _appearance:
+    _height: 1
+    _broadShoulders: 0
+    _headId: 0
+    _hairFrontId: 255
+    _hairBackId: 255
+    _hatId: 255
+    _topId: 255
+    _bottomId: 255
+    _shoesId: 255
+    _eyesId: 0
+    _legsId: 0
+    _portraitId: 0
+    _skinColor:
+      serializedVersion: 2
+      rgba: 4287934176
+    _hairColor:
+      serializedVersion: 2
+      rgba: 4281154158
+    _eyeColor:
+      serializedVersion: 2
+      rgba: 4284110893
+  _idleMotionOverride: {fileID: 0}
 --- !u!1 &776228507
 GameObject:
   m_ObjectHideFlags: 0
@@ -1459,6 +1543,7 @@ GameObject:
   - component: {fileID: 776356741}
   - component: {fileID: 776356740}
   - component: {fileID: 776356739}
+  - component: {fileID: 776356742}
   m_Layer: 0
   m_Name: NpcPawn
   m_TagString: Untagged
@@ -1525,7 +1610,7 @@ SpriteRenderer:
   m_SortingLayerID: 0
   m_SortingLayer: 0
   m_SortingOrder: 0
-  m_Sprite: {fileID: 21300000, guid: 6e142000690956a4eb2efa66fcc173b5, type: 3}
+  m_Sprite: {fileID: 0}
   m_Color: {r: 1, g: 1, b: 1, a: 1}
   m_FlipX: 0
   m_FlipY: 0
@@ -1533,7 +1618,7 @@ SpriteRenderer:
   m_Size: {x: 0.16, y: 0.16}
   m_AdaptiveModeThreshold: 0.5
   m_SpriteTileMode: 0
-  m_WasSpriteAssigned: 1
+  m_WasSpriteAssigned: 0
   m_MaskInteraction: 0
   m_SpriteSortPoint: 0
 --- !u!61 &776356740
@@ -1600,6 +1685,46 @@ MonoBehaviour:
   _linkedDoorInstanceId: 
   _arrivalPoint: {fileID: 0}
   _doorTrigger: {fileID: 0}
+  _isHidden: 0
+  _isDead: 0
+  _facingLeft: 0
+  _facingInitialized: 0
+--- !u!114 &776356742
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 776356737}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 8e74c5c09566f624f8dbb49fec82bbe6, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  _useDefinitionAppearance: 1
+  _appearance:
+    _height: 0
+    _broadShoulders: 0
+    _headId: 0
+    _hairFrontId: 0
+    _hairBackId: 0
+    _hatId: 255
+    _topId: 255
+    _bottomId: 255
+    _shoesId: 255
+    _eyesId: 0
+    _legsId: 0
+    _portraitId: 0
+    _skinColor:
+      serializedVersion: 2
+      rgba: 4287934176
+    _hairColor:
+      serializedVersion: 2
+      rgba: 4281154158
+    _eyeColor:
+      serializedVersion: 2
+      rgba: 4284110893
+  _idleMotionOverride: {fileID: 0}
 --- !u!1 &1110454310
 GameObject:
   m_ObjectHideFlags: 0
@@ -1696,6 +1821,200 @@ MonoBehaviour:
   m_MinRegionArea: 0
   m_HideEditorLogs: 0
   m_NavMeshData: {fileID: 0}
+--- !u!1 &1203615602
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1203615603}
+  - component: {fileID: 1203615607}
+  - component: {fileID: 1203615606}
+  - component: {fileID: 1203615605}
+  - component: {fileID: 1203615604}
+  m_Layer: 0
+  m_Name: NpcPawn (1)
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!4 &1203615603
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1203615602}
+  serializedVersion: 2
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 3.91, y: 1.817, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 1679236806}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &1203615604
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1203615602}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 8e74c5c09566f624f8dbb49fec82bbe6, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  _useDefinitionAppearance: 1
+  _appearance:
+    _height: 0
+    _broadShoulders: 0
+    _headId: 0
+    _hairFrontId: 0
+    _hairBackId: 0
+    _hatId: 255
+    _topId: 255
+    _bottomId: 255
+    _shoesId: 255
+    _eyesId: 0
+    _legsId: 0
+    _portraitId: 0
+    _skinColor:
+      serializedVersion: 2
+      rgba: 4287934176
+    _hairColor:
+      serializedVersion: 2
+      rgba: 4281154158
+    _eyeColor:
+      serializedVersion: 2
+      rgba: 4284110893
+  _idleMotionOverride: {fileID: 0}
+--- !u!212 &1203615605
+SpriteRenderer:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1203615602}
+  m_Enabled: 1
+  m_CastShadows: 0
+  m_ReceiveShadows: 0
+  m_DynamicOccludee: 1
+  m_StaticShadowCaster: 0
+  m_MotionVectors: 1
+  m_LightProbeUsage: 1
+  m_ReflectionProbeUsage: 1
+  m_RayTracingMode: 0
+  m_RayTraceProcedural: 0
+  m_RayTracingAccelStructBuildFlagsOverride: 0
+  m_RayTracingAccelStructBuildFlags: 1
+  m_SmallMeshCulling: 1
+  m_RenderingLayerMask: 1
+  m_RendererPriority: 0
+  m_Materials:
+  - {fileID: 10754, guid: 0000000000000000f000000000000000, type: 0}
+  m_StaticBatchInfo:
+    firstSubMesh: 0
+    subMeshCount: 0
+  m_StaticBatchRoot: {fileID: 0}
+  m_ProbeAnchor: {fileID: 0}
+  m_LightProbeVolumeOverride: {fileID: 0}
+  m_ScaleInLightmap: 1
+  m_ReceiveGI: 1
+  m_PreserveUVs: 0
+  m_IgnoreNormalsForChartDetection: 0
+  m_ImportantGI: 0
+  m_StitchLightmapSeams: 1
+  m_SelectedEditorRenderState: 0
+  m_MinimumChartSize: 4
+  m_AutoUVMaxDistance: 0.5
+  m_AutoUVMaxAngle: 89
+  m_LightmapParameters: {fileID: 0}
+  m_SortingLayerID: 0
+  m_SortingLayer: 0
+  m_SortingOrder: 0
+  m_Sprite: {fileID: 0}
+  m_Color: {r: 1, g: 1, b: 1, a: 1}
+  m_FlipX: 0
+  m_FlipY: 0
+  m_DrawMode: 0
+  m_Size: {x: 0.16, y: 0.16}
+  m_AdaptiveModeThreshold: 0.5
+  m_SpriteTileMode: 0
+  m_WasSpriteAssigned: 0
+  m_MaskInteraction: 0
+  m_SpriteSortPoint: 0
+--- !u!61 &1203615606
+BoxCollider2D:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1203615602}
+  m_Enabled: 1
+  serializedVersion: 3
+  m_Density: 1
+  m_Material: {fileID: 0}
+  m_IncludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_ExcludeLayers:
+    serializedVersion: 2
+    m_Bits: 0
+  m_LayerOverridePriority: 0
+  m_ForceSendLayers:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  m_ForceReceiveLayers:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  m_ContactCaptureLayers:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  m_CallbackLayers:
+    serializedVersion: 2
+    m_Bits: 4294967295
+  m_IsTrigger: 0
+  m_UsedByEffector: 0
+  m_CompositeOperation: 0
+  m_CompositeOrder: 0
+  m_Offset: {x: 0, y: 0}
+  m_SpriteTilingProperty:
+    border: {x: 0, y: 0, z: 0, w: 0}
+    pivot: {x: 0.5, y: 0.5}
+    oldSize: {x: 1.5, y: 1.5}
+    newSize: {x: 0.16, y: 0.16}
+    adaptiveTilingThreshold: 0.5
+    drawMode: 0
+    adaptiveTiling: 0
+  m_AutoTiling: 0
+  m_Size: {x: 1, y: 1}
+  m_EdgeRadius: 0
+--- !u!114 &1203615607
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1203615602}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 25f25199364ef264f9a28eef223f2a76, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: 
+  _instanceId: Npc_Item_01
+  _definition: {fileID: 11400000, guid: 14a1430f1075de043953b69008d2dc81, type: 2}
+  _visualRoot: {fileID: 0}
+  _linkedDoorInstanceId: 
+  _arrivalPoint: {fileID: 0}
+  _doorTrigger: {fileID: 0}
+  _isHidden: 0
+  _isDead: 0
+  _facingLeft: 0
+  _facingInitialized: 0
 --- !u!1 &1303608425
 GameObject:
   m_ObjectHideFlags: 0
@@ -1761,12 +2080,12 @@ MonoBehaviour:
   _pawnManager: {fileID: 1679236805}
   _settings: {fileID: 11400000, guid: 8413faebbb41b9946a5cc9726257ec25, type: 2}
   _infoBar: {fileID: 0}
-  _itemCatalog: {fileID: 0}
+  _itemCatalog: {fileID: 11400000, guid: 7035a7ab30ace3944864fee923a27eae, type: 2}
   _inventoryIconSet: {fileID: 0}
   _inventoryCapacityStatId: coc.str
   _inventoryCapacityMultiplier: 1
   _inventoryFallbackCapacity: 0
-  _handoutCatalog: {fileID: 0}
+  _handoutCatalog: {fileID: 11400000, guid: fef8c6251c0b61341837ccb6a522a112, type: 2}
   _enableBoardDashboard: 1
   _walkButton: {fileID: 185402859}
   _checkStatId: default
@@ -1829,6 +2148,16 @@ MonoBehaviour:
     m_Bits: 4294967295
   _defaultMaterial: {fileID: 2100000, guid: a97c105638bdf8b4a8650670310a4cd3, type: 2}
   _activeMaterial: {fileID: 2100000, guid: 0541375d74ba1e345a8b7d5d9b240ff7, type: 2}
+  _pawnSpriteLibrary: {fileID: 11400000, guid: 6d1622cb193d50542b2e3c664c271188, type: 2}
+  _defaultPawnIdleMotion: {fileID: 11400000, guid: 63a8865d06d7f7e4aa8cdeccf587b7d7, type: 2}
+  _pawnSpriteRigInitialCapacity: 32
+  _pawnSpritePixelsPerUnit: 16
+  _pawnSpriteSortingBandsPerWorldUnit: 4
+  _pawnSpriteRigAcquirePerFrame: 4
+  _pawnSpriteCullingInterval: 4
+  _pawnSpriteCellWorldSize: 1.5
+  _pawnSpriteEnterMarginCells: 1
+  _pawnSpriteExitMarginCells: 2
   _movementManager: {fileID: 93580602}
   _followActivePawnDuringMovement: 1
   _cameraFollowSmoothTime: 0.12
@@ -1838,10 +2167,10 @@ MonoBehaviour:
   _cameraFocusEase: 9
   _playerPawns:
   - {fileID: 363143312}
-  _monsterPawns:
-  - {fileID: 742006254}
   _npcPawns:
   - {fileID: 776356741}
+  - {fileID: 1203615607}
+  - {fileID: 742006254}
   _nextTurnButton: {fileID: 185402859}
   _createTurnButtonAtRuntime: 1
   _turnUiReferenceResolution: {x: 1920, y: 1080}
@@ -1863,7 +2192,95 @@ Transform:
   m_Children:
   - {fileID: 363143310}
   - {fileID: 776356738}
+  - {fileID: 1203615603}
   - {fileID: 742006251}
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &1819240849
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 1819240851}
+  - component: {fileID: 1819240850}
+  m_Layer: 0
+  m_Name: Village0811
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!212 &1819240850
+SpriteRenderer:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1819240849}
+  m_Enabled: 1
+  m_CastShadows: 0
+  m_ReceiveShadows: 0
+  m_DynamicOccludee: 1
+  m_StaticShadowCaster: 0
+  m_MotionVectors: 1
+  m_LightProbeUsage: 1
+  m_ReflectionProbeUsage: 1
+  m_RayTracingMode: 0
+  m_RayTraceProcedural: 0
+  m_RayTracingAccelStructBuildFlagsOverride: 0
+  m_RayTracingAccelStructBuildFlags: 1
+  m_SmallMeshCulling: 1
+  m_RenderingLayerMask: 1
+  m_RendererPriority: 0
+  m_Materials:
+  - {fileID: 2100000, guid: a97c105638bdf8b4a8650670310a4cd3, type: 2}
+  m_StaticBatchInfo:
+    firstSubMesh: 0
+    subMeshCount: 0
+  m_StaticBatchRoot: {fileID: 0}
+  m_ProbeAnchor: {fileID: 0}
+  m_LightProbeVolumeOverride: {fileID: 0}
+  m_ScaleInLightmap: 1
+  m_ReceiveGI: 1
+  m_PreserveUVs: 0
+  m_IgnoreNormalsForChartDetection: 0
+  m_ImportantGI: 0
+  m_StitchLightmapSeams: 1
+  m_SelectedEditorRenderState: 0
+  m_MinimumChartSize: 4
+  m_AutoUVMaxDistance: 0.5
+  m_AutoUVMaxAngle: 89
+  m_LightmapParameters: {fileID: 0}
+  m_SortingLayerID: 0
+  m_SortingLayer: 0
+  m_SortingOrder: -30000
+  m_Sprite: {fileID: 21300000, guid: 09aca5850faaee841b7559b265822dc7, type: 3}
+  m_Color: {r: 1, g: 1, b: 1, a: 1}
+  m_FlipX: 0
+  m_FlipY: 0
+  m_DrawMode: 0
+  m_Size: {x: 173.875, y: 98.875}
+  m_AdaptiveModeThreshold: 0.5
+  m_SpriteTileMode: 0
+  m_WasSpriteAssigned: 1
+  m_MaskInteraction: 0
+  m_SpriteSortPoint: 0
+--- !u!4 &1819240851
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1819240849}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: 28.9, y: 41.9, z: 0}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &1834543159
@@ -2075,3 +2492,4 @@ SceneRoots:
   - {fileID: 1996755622}
   - {fileID: 543804479}
   - {fileID: 730722596}
+  - {fileID: 1819240851}

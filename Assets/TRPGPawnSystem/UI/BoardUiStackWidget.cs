@@ -166,9 +166,11 @@ namespace Trpg.Pawns
         private Button _hardButton;
         private Button _extremeButton;
         private Button _rollButton;
+        private Button _visibilityButton;
         private Button _pushButton;
         private Button _luckButton;
         private RectTransform _effectRollHost;
+        private Button _effectVisibilityButton;
         private InputField _effectDiceCountInput;
         private InputField _effectDiceSidesInput;
         private InputField _effectModifierInput;
@@ -176,6 +178,7 @@ namespace Trpg.Pawns
         private PawnCheckSourceData _selectedSource;
         private PawnCheckDifficulty _selectedDifficulty;
         private int _bonusPenalty;
+        private bool _secretRoll;
         private BoardLeftPane _leftPane = BoardLeftPane.Identity;
         private BoardRightPane _rightPane = BoardRightPane.Stats;
         private bool _supportsStats;
@@ -218,6 +221,9 @@ namespace Trpg.Pawns
         public PawnCheckSourceData SelectedSource => _selectedSource;
         public PawnCheckDifficulty SelectedDifficulty => _selectedDifficulty;
         public int BonusPenalty => _bonusPenalty;
+        public RollVisibility Visibility => _secretRoll
+            ? RollVisibility.RollerAndGameMaster
+            : RollVisibility.Public;
         public bool ShowsRightPanel =>
             _supportsStats || _supportsSkills;
 
@@ -231,6 +237,7 @@ namespace Trpg.Pawns
         public event Action<PawnCheckDifficulty> DifficultyRequested;
         public event Action RollRequested;
         public event Action<int> BonusPenaltyChanged;
+        public event Action<RollVisibility> VisibilityChanged;
 
         public static BoardUiStackWidget CreateRuntime(
             RectTransform parentRect,
@@ -1106,15 +1113,28 @@ namespace Trpg.Pawns
                 _rollButton.transform as RectTransform,
                 0f,
                 0f,
-                174f,
+                150f,
                 42f);
             _rollButton.onClick.AddListener(
                 () => RollRequested?.Invoke());
 
+            _visibilityButton = CreateButton(
+                "VisibilityButton",
+                RollHost,
+                "전체 공개",
+                12);
+            SetBottomLeft(
+                _visibilityButton.transform as RectTransform,
+                158f,
+                0f,
+                88f,
+                42f);
+            _visibilityButton.onClick.AddListener(ToggleVisibility);
+
             _pushButton = CreateButton(
                 "PushButton",
                 RollHost,
-                "밀어붙이기",
+                "강행 판정",
                 13);
             SetBottomRight(
                 _pushButton.transform as RectTransform,
@@ -1136,6 +1156,7 @@ namespace Trpg.Pawns
             _pushButton.interactable = false;
             _luckButton.interactable = false;
             SetBonusPenalty(0);
+            SetVisibility(RollVisibility.Public);
             ClearSource();
         }
 
@@ -1215,10 +1236,23 @@ namespace Trpg.Pawns
                 cancelButton.transform as RectTransform,
                 0f,
                 0f,
-                132f,
+                104f,
                 46f);
             cancelButton.onClick.AddListener(
                 () => RollOverlayCloseRequested?.Invoke());
+
+            _effectVisibilityButton = CreateButton(
+                "EffectVisibilityButton",
+                _effectRollHost,
+                "전체 공개",
+                12);
+            SetBottomLeft(
+                _effectVisibilityButton.transform as RectTransform,
+                112f,
+                0f,
+                118f,
+                46f);
+            _effectVisibilityButton.onClick.AddListener(ToggleVisibility);
 
             var confirmButton = CreateButton(
                 "EffectConfirmButton",
@@ -1230,7 +1264,7 @@ namespace Trpg.Pawns
                 confirmButton.transform as RectTransform,
                 0f,
                 0f,
-                176f,
+                136f,
                 46f);
             confirmButton.onClick.AddListener(ConfirmEffectRoll);
         }
@@ -1332,7 +1366,8 @@ namespace Trpg.Pawns
                 new PawnEffectRollRequest(
                     diceCount,
                     diceSides,
-                    Mathf.Clamp(modifier, -999, 999)));
+                    Mathf.Clamp(modifier, -999, 999),
+                    Visibility));
         }
 
         private static bool TryParseEffectValue(
@@ -1429,6 +1464,39 @@ namespace Trpg.Pawns
                 _bonusPenaltyText.color = TextMuted;
             }
             BonusPenaltyChanged?.Invoke(_bonusPenalty);
+        }
+
+        private void ToggleVisibility()
+        {
+            SetVisibility(_secretRoll
+                ? RollVisibility.Public
+                : RollVisibility.RollerAndGameMaster);
+        }
+
+        private void SetVisibility(RollVisibility visibility)
+        {
+            _secretRoll =
+                visibility == RollVisibility.RollerAndGameMaster;
+            RefreshVisibilityButton(_visibilityButton);
+            RefreshVisibilityButton(_effectVisibilityButton);
+            VisibilityChanged?.Invoke(Visibility);
+        }
+
+        private void RefreshVisibilityButton(Button button)
+        {
+            if (button == null)
+                return;
+
+            SetButtonLabel(
+                button,
+                _secretRoll ? "비밀 굴림" : "전체 공개");
+            var image = button.GetComponent<Image>();
+            if (image != null)
+            {
+                image.color = _secretRoll
+                    ? new Color(0.38f, 0.18f, 0.52f, 1f)
+                    : SurfaceElement;
+            }
         }
 
         private void ApplyBand(BoardUiWidthBand band)

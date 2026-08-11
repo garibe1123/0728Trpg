@@ -4,6 +4,36 @@ using UnityEngine;
 
 namespace Trpg.Pawns
 {
+    public enum RollVisibility
+    {
+        Public = 0,
+        RollerAndGameMaster = 1
+    }
+
+    [Serializable]
+    public sealed class PawnRollLogEntrySnapshot
+    {
+        public long Sequence;
+        public string TimestampUtc;
+        public int Kind;
+        public string PawnDefinitionId;
+        public string PawnName;
+        public string Title;
+        public string Expression;
+        public int Value;
+        public string Result;
+        public string Detail;
+        public int Visibility;
+    }
+
+    [Serializable]
+    public sealed class PawnRollLogSnapshot
+    {
+        public long NextSequence;
+        public List<PawnRollLogEntrySnapshot> Entries =
+            new List<PawnRollLogEntrySnapshot>();
+    }
+
     public enum PawnRollLogKind
     {
         PureD100,
@@ -27,7 +57,8 @@ namespace Trpg.Pawns
             string expression,
             int value,
             string result,
-            string detail)
+            string detail,
+            RollVisibility visibility = RollVisibility.Public)
         {
             Sequence = sequence;
             TimestampUtc = timestampUtc;
@@ -39,6 +70,7 @@ namespace Trpg.Pawns
             Value = value;
             Result = result ?? string.Empty;
             Detail = detail ?? string.Empty;
+            Visibility = visibility;
         }
 
         public long Sequence { get; }
@@ -51,6 +83,9 @@ namespace Trpg.Pawns
         public int Value { get; }
         public string Result { get; }
         public string Detail { get; }
+        public RollVisibility Visibility { get; }
+        public bool IsSecret =>
+            Visibility == RollVisibility.RollerAndGameMaster;
 
         public string ToDisplayString()
         {
@@ -64,7 +99,8 @@ namespace Trpg.Pawns
             if (Kind == PawnRollLogKind.System)
                 return $"[{Sequence:0000}] {owner} · {Title} · {Detail}";
 
-            return $"[{Sequence:0000}] {owner} · {Title} · " +
+            var visibility = IsSecret ? "[비밀] " : string.Empty;
+            return $"[{Sequence:0000}] {visibility}{owner} · {Title} · " +
                    $"{Expression} → {Value} · {Result} · {Detail}";
         }
     }
@@ -82,6 +118,9 @@ namespace Trpg.Pawns
             new List<PawnRollLogEntry>();
 
         private static long _nextSequence;
+        private static bool _restoringSnapshot;
+
+        public static bool IsRestoringSnapshot => _restoringSnapshot;
 
         public static event Action<PawnRollLogEntry> EntryAdded;
         public static event Action EntriesCleared;
@@ -97,6 +136,7 @@ namespace Trpg.Pawns
             _nextSequence = 0;
             EntryAdded = null;
             EntriesCleared = null;
+            _restoringSnapshot = false;
         }
 
         public static PawnRollLogEntry RecordRoll(
@@ -106,7 +146,8 @@ namespace Trpg.Pawns
             string expression,
             int value,
             string result,
-            string detail)
+            string detail,
+            RollVisibility visibility = RollVisibility.Public)
         {
             var entry = new PawnRollLogEntry(
                 ++_nextSequence,
@@ -118,7 +159,8 @@ namespace Trpg.Pawns
                 expression,
                 value,
                 result,
-                detail);
+                detail,
+                visibility);
             Add(entry);
             return entry;
         }
@@ -131,7 +173,8 @@ namespace Trpg.Pawns
             string expression,
             int value,
             string result,
-            string detail)
+            string detail,
+            RollVisibility visibility = RollVisibility.Public)
         {
             var entry = new PawnRollLogEntry(
                 ++_nextSequence,
@@ -143,7 +186,8 @@ namespace Trpg.Pawns
                 expression,
                 value,
                 result,
-                detail);
+                detail,
+                visibility);
             Add(entry);
             return entry;
         }
@@ -193,6 +237,113 @@ namespace Trpg.Pawns
                 detail);
         }
 
+        public static PawnRollLogSnapshot CreateSnapshot()
+        {
+            var snapshot = new PawnRollLogSnapshot
+            {
+                NextSequence = _nextSequence
+            };
+
+            for (var index = 0; index < EntriesInternal.Count; index++)
+            {
+                var entry = EntriesInternal[index];
+                snapshot.Entries.Add(new PawnRollLogEntrySnapshot
+                {
+                    Sequence = entry.Sequence,
+                    TimestampUtc = entry.TimestampUtc.ToString("O"),
+                    Kind = (int)entry.Kind,
+                    PawnDefinitionId = entry.Pawn != null &&
+                                       entry.Pawn.Definition != null
+                        ? entry.Pawn.Definition.Id
+                        : string.Empty,
+                    PawnName = entry.PawnName,
+                    Title = entry.Title,
+                    Expression = entry.Expression,
+                    Value = entry.Value,
+                    Result = entry.Result,
+                    Detail = entry.Detail,
+                    Visibility = (int)entry.Visibility
+                });
+            }
+
+            return snapshot;
+        }
+
+        public static bool TryApplySnapshot(
+            PawnRollLogSnapshot snapshot,
+            Func<string, InteractivePawn> pawnResolver,
+            out string error)
+        {
+            error = string.Empty;
+            if (snapshot == null)
+            {
+                error = "굴림 로그 Snapshot이 비어 있습니다.";
+                return false;
+            }
+
+            var restored = new List<PawnRollLogEntry>();
+            var source = snapshot.Entries ??
+                         new List<PawnRollLogEntrySnapshot>();
+            for (var index = 0; index < source.Count; index++)
+            {
+                var stored = source[index];
+                if (stored == null)
+                    continue;
+
+                var timestamp = DateTime.UtcNow;
+                if (!string.IsNullOrWhiteSpace(stored.TimestampUtc))
+                    DateTime.TryParse(stored.TimestampUtc, out timestamp);
+                var pawn = pawnResolver != null
+                    ? pawnResolver(stored.PawnDefinitionId)
+                    : null;
+                var kind = Enum.IsDefined(
+                    typeof(PawnRollLogKind), stored.Kind)
+                    ? (PawnRollLogKind)stored.Kind
+                    : PawnRollLogKind.System;
+                var visibility = Enum.IsDefined(
+                    typeof(RollVisibility), stored.Visibility)
+                    ? (RollVisibility)stored.Visibility
+                    : RollVisibility.Public;
+                restored.Add(new PawnRollLogEntry(
+                    Math.Max(0, stored.Sequence),
+                    timestamp.ToUniversalTime(),
+                    kind,
+                    pawn,
+                    stored.PawnName,
+                    stored.Title,
+                    stored.Expression,
+                    stored.Value,
+                    stored.Result,
+                    stored.Detail,
+                    visibility));
+            }
+
+            _restoringSnapshot = true;
+            try
+            {
+                EntriesInternal.Clear();
+                for (var index = 0; index < restored.Count; index++)
+                {
+                    if (EntriesInternal.Count >= MaximumEntries)
+                        EntriesInternal.RemoveAt(0);
+                    EntriesInternal.Add(restored[index]);
+                }
+                _nextSequence = Math.Max(snapshot.NextSequence,
+                    EntriesInternal.Count > 0
+                        ? EntriesInternal[EntriesInternal.Count - 1].Sequence
+                        : 0);
+                EntriesCleared?.Invoke();
+                for (var index = 0; index < EntriesInternal.Count; index++)
+                    EntryAdded?.Invoke(EntriesInternal[index]);
+            }
+            finally
+            {
+                _restoringSnapshot = false;
+            }
+
+            return true;
+        }
+
         public static void ClearAll()
         {
             EntriesInternal.Clear();
@@ -214,7 +365,8 @@ namespace Trpg.Pawns
             // 이벤트 구독 순서와 무관하게 단일 SessionAuthority로 직접 전달합니다.
             // Authority 내부에서 Sequence 중복을 제거하므로 기존 이벤트 경로와
             // 동시에 호출되어도 네트워크 로그는 한 번만 전송됩니다.
-            TRPGSessionAuthority.PublishLogEntryFromService(entry);
+            if (!_restoringSnapshot)
+                TRPGSessionAuthority.PublishLogEntryFromService(entry);
         }
 
         private static string NormalizeChat(string message)

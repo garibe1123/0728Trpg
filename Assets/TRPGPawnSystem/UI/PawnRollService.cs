@@ -89,6 +89,83 @@ namespace Trpg.Pawns
         }
     }
 
+    public sealed class D100ModifiedRollResult
+    {
+        private readonly int[] _tensDice;
+        private readonly int[] _candidateRolls;
+
+        internal D100ModifiedRollResult(
+            int target,
+            int unitsDie,
+            int[] tensDice,
+            int bonusPenaltyLevel,
+            int selectedIndex,
+            D100CheckResult selectedResult)
+        {
+            Target = target;
+            UnitsDie = unitsDie;
+            _tensDice = tensDice ?? Array.Empty<int>();
+            BonusPenaltyLevel = Math.Max(-2, Math.Min(2, bonusPenaltyLevel));
+            SelectedIndex = selectedIndex;
+            SelectedResult = selectedResult;
+            _candidateRolls = new int[_tensDice.Length];
+            for (var index = 0; index < _tensDice.Length; index++)
+                _candidateRolls[index] = ComposeRoll(_tensDice[index], unitsDie);
+        }
+
+        public int Target { get; }
+        public int UnitsDie { get; }
+        public IReadOnlyList<int> TensDice => _tensDice;
+        public IReadOnlyList<int> CandidateRolls => _candidateRolls;
+        public int BonusPenaltyLevel { get; }
+        public int SelectedIndex { get; }
+        public D100CheckResult SelectedResult { get; }
+        public int BaseRoll => _candidateRolls.Length > 0
+            ? _candidateRolls[0]
+            : SelectedResult.Roll;
+        public int Roll => SelectedResult.Roll;
+        public bool HasAdditionalTensDice => _tensDice.Length > 1;
+
+        public string ModifierLabel
+        {
+            get
+            {
+                if (BonusPenaltyLevel > 0)
+                    return $"보너스 {BonusPenaltyLevel}";
+                if (BonusPenaltyLevel < 0)
+                    return $"페널티 {-BonusPenaltyLevel}";
+                return "보통";
+            }
+        }
+
+        public string GetCandidateLabel()
+        {
+            var builder = new StringBuilder();
+            builder.Append("일의 자리 ");
+            builder.Append(UnitsDie);
+            builder.Append(" / 후보 ");
+            for (var index = 0; index < _candidateRolls.Length; index++)
+            {
+                if (index > 0)
+                    builder.Append(", ");
+                if (index == SelectedIndex)
+                    builder.Append('[');
+                builder.Append(_candidateRolls[index]);
+                if (index == SelectedIndex)
+                    builder.Append(']');
+            }
+            builder.Append(" / ");
+            builder.Append(ModifierLabel);
+            return builder.ToString();
+        }
+
+        private static int ComposeRoll(int tensDie, int unitsDie)
+        {
+            var value = tensDie * 10 + unitsDie;
+            return value == 0 ? 100 : value;
+        }
+    }
+
     public sealed class EffectRollResult
     {
         private readonly int[] _individualResults;
@@ -118,10 +195,15 @@ namespace Trpg.Pawns
         public int Modifier { get; }
         public IReadOnlyList<int> IndividualResults => _individualResults;
         public int Total { get; }
-        public int MinimumTotal => DiceCount + Modifier;
-        public int MaximumTotal => DiceCount * Sides + Modifier;
-        public string Expression =>
-            PawnRollService.FormatExpression(
+        public int MinimumTotal => DiceCount == 0
+            ? Modifier
+            : DiceCount + Modifier;
+        public int MaximumTotal => DiceCount == 0
+            ? Modifier
+            : DiceCount * Sides + Modifier;
+        public string Expression => DiceCount == 0
+            ? Modifier.ToString()
+            : PawnRollService.FormatExpression(
                 DiceCount,
                 Sides,
                 Modifier);
@@ -174,10 +256,43 @@ namespace Trpg.Pawns
 
         public D100CheckResult RollD100(int target)
         {
-            var roll = _random.Next(
-                MinimumD100Value,
-                MaximumD100Value + 1);
-            return EvaluateD100(roll, target);
+            return RollD100Modified(target, 0).SelectedResult;
+        }
+
+        public D100ModifiedRollResult RollD100Modified(
+            int target,
+            int bonusPenaltyLevel)
+        {
+            var clampedLevel = Math.Max(-2, Math.Min(2, bonusPenaltyLevel));
+            var unitsDie = _random.Next(0, 10);
+            var tensCount = 1 + Math.Abs(clampedLevel);
+            var tensDice = new int[tensCount];
+            var selectedIndex = 0;
+            var selectedRoll = 0;
+
+            for (var index = 0; index < tensCount; index++)
+            {
+                tensDice[index] = _random.Next(0, 10);
+                var candidate = ComposePercentileRoll(
+                    tensDice[index],
+                    unitsDie);
+                if (index == 0 ||
+                    clampedLevel > 0 && candidate < selectedRoll ||
+                    clampedLevel < 0 && candidate > selectedRoll)
+                {
+                    selectedIndex = index;
+                    selectedRoll = candidate;
+                }
+            }
+
+            var evaluated = EvaluateD100(selectedRoll, target);
+            return new D100ModifiedRollResult(
+                evaluated.Target,
+                unitsDie,
+                tensDice,
+                clampedLevel,
+                selectedIndex,
+                evaluated);
         }
 
         public D100CheckResult EvaluateD100(int roll, int target)
@@ -244,6 +359,99 @@ namespace Trpg.Pawns
             return modifier < 0
                 ? $"{diceCount}d{sides}{modifier}"
                 : $"{diceCount}d{sides}";
+        }
+
+        public static bool TryParseExpression(
+            string expression,
+            out int diceCount,
+            out int sides,
+            out int modifier)
+        {
+            diceCount = 0;
+            sides = 0;
+            modifier = 0;
+            if (string.IsNullOrWhiteSpace(expression))
+                return false;
+
+            var normalized = expression
+                .Trim()
+                .Replace(" ", string.Empty)
+                .ToLowerInvariant();
+            if (int.TryParse(normalized, out var constant))
+            {
+                if (constant < 0 || constant > 1000000)
+                    return false;
+
+                modifier = constant;
+                return true;
+            }
+
+            var dIndex = normalized.IndexOf('d');
+            if (dIndex <= 0 || dIndex >= normalized.Length - 1)
+                return false;
+
+            var modifierIndex = -1;
+            for (var index = dIndex + 1; index < normalized.Length; index++)
+            {
+                if (normalized[index] == '+' || normalized[index] == '-')
+                {
+                    modifierIndex = index;
+                    break;
+                }
+            }
+
+            var countText = normalized.Substring(0, dIndex);
+            var sideText = modifierIndex >= 0
+                ? normalized.Substring(dIndex + 1, modifierIndex - dIndex - 1)
+                : normalized.Substring(dIndex + 1);
+            var modifierText = modifierIndex >= 0
+                ? normalized.Substring(modifierIndex)
+                : string.Empty;
+
+            if (!int.TryParse(countText, out diceCount) ||
+                !int.TryParse(sideText, out sides) ||
+                (!string.IsNullOrEmpty(modifierText) &&
+                 !int.TryParse(modifierText, out modifier)))
+            {
+                return false;
+            }
+
+            return diceCount >= 1 &&
+                   diceCount <= MaximumDiceCount &&
+                   sides >= 2 &&
+                   sides <= MaximumDiceSides;
+        }
+
+        public EffectRollResult RollExpression(string expression)
+        {
+            if (!TryParseExpression(
+                    expression,
+                    out var diceCount,
+                    out var sides,
+                    out var modifier))
+            {
+                throw new FormatException(
+                    $"유효하지 않은 주사위 식입니다: {expression}");
+            }
+
+            if (diceCount == 0)
+            {
+                return new EffectRollResult(
+                    0,
+                    2,
+                    modifier,
+                    Array.Empty<int>());
+            }
+
+            return RollEffect(diceCount, sides, modifier);
+        }
+
+        private static int ComposePercentileRoll(
+            int tensDie,
+            int unitsDie)
+        {
+            var value = tensDie * 10 + unitsDie;
+            return value == 0 ? 100 : value;
         }
 
         private static void ValidateExpression(

@@ -50,6 +50,8 @@ namespace Trpg.Pawns
         private Coroutine _deferredRowBindRoutine;
         private bool _hasSource;
         private bool _challengeUsed;
+        private int _bonusPenaltyLevel;
+        private RollVisibility _rollVisibility = RollVisibility.Public;
         private bool _isOpen;
         private bool _overlayEventsBound;
         private bool _pawnEventsBound;
@@ -121,6 +123,26 @@ namespace Trpg.Pawns
                 return;
             _difficulty = difficulty;
             DifficultyChanged?.Invoke(difficulty);
+        }
+
+        public void SetBonusPenaltyFromBoardStack(int value)
+        {
+            _bonusPenaltyLevel = Mathf.Clamp(value, -2, 2);
+            _overlay?.SetRollOptions(
+                _bonusPenaltyLevel,
+                _rollVisibility);
+        }
+
+        public void SetVisibilityFromBoardStack(
+            RollVisibility visibility)
+        {
+            _rollVisibility = visibility ==
+                              RollVisibility.RollerAndGameMaster
+                ? RollVisibility.RollerAndGameMaster
+                : RollVisibility.Public;
+            _overlay?.SetRollOptions(
+                _bonusPenaltyLevel,
+                _rollVisibility);
         }
 
         public bool RollFromBoardStack()
@@ -296,6 +318,8 @@ namespace Trpg.Pawns
             _sessionState = GetOrCreateState(pawn);
             _sessionState.EnsureSession();
             LoadSessionState();
+            _bonusPenaltyLevel = 0;
+            _rollVisibility = RollVisibility.Public;
             _isOpen = true;
 
             HideLegacyManualTargetInput();
@@ -320,6 +344,9 @@ namespace Trpg.Pawns
             ExpandExistingStatPanel();
             ConfigureExistingStatPanelInteraction();
             _overlay.OpenWaiting();
+            _overlay.SetRollOptions(
+                _bonusPenaltyLevel,
+                _rollVisibility);
             ApplyStoredWindowPositions();
             RestoreSessionUi();
             BindSourceRows();
@@ -773,6 +800,10 @@ namespace Trpg.Pawns
             _overlay.SourceDropped += HandleSourceSelected;
             _overlay.DifficultyRequested +=
                 HandleDifficultyRequested;
+            _overlay.BonusPenaltyChanged +=
+                HandleBonusPenaltyChanged;
+            _overlay.VisibilityChanged +=
+                HandleVisibilityChanged;
             _overlay.ClearSourceRequested +=
                 HandleClearSourceRequested;
             _overlay.CloseRequested += HidePanelPreservingState;
@@ -788,10 +819,24 @@ namespace Trpg.Pawns
             _overlay.SourceDropped -= HandleSourceSelected;
             _overlay.DifficultyRequested -=
                 HandleDifficultyRequested;
+            _overlay.BonusPenaltyChanged -=
+                HandleBonusPenaltyChanged;
+            _overlay.VisibilityChanged -=
+                HandleVisibilityChanged;
             _overlay.ClearSourceRequested -=
                 HandleClearSourceRequested;
             _overlay.CloseRequested -= HidePanelPreservingState;
             _overlayEventsBound = false;
+        }
+
+        private void HandleBonusPenaltyChanged(int value)
+        {
+            _bonusPenaltyLevel = Mathf.Clamp(value, -2, 2);
+        }
+
+        private void HandleVisibilityChanged(RollVisibility visibility)
+        {
+            _rollVisibility = visibility;
         }
 
         private void HandlePureRollRequested()
@@ -803,15 +848,19 @@ namespace Trpg.Pawns
                 return;
             }
 
-            var roll = _rollService.RollD100(100).Roll;
+            var modifiedRoll = _rollService.RollD100Modified(
+                100,
+                _bonusPenaltyLevel);
+            var roll = modifiedRoll.Roll;
             var data = new PawnRollWindowData(
                 $"{ResolvePawnName(_currentPawn)} · 순수 D100",
-                "d100",
+                BuildD100Expression(modifiedRoll),
                 roll,
                 1,
                 100,
                 $"결과 {roll}",
-                "목표값 없이 숫자만 확인하는 굴림",
+                modifiedRoll.GetCandidateLabel() +
+                " / 목표값 없이 숫자만 확인하는 굴림",
                 new Color(1f, 0.78f, 0.22f),
                 1.55f);
             var ownerState = _sessionState;
@@ -822,10 +871,11 @@ namespace Trpg.Pawns
                 PawnRollLogKind.PureD100,
                 ownerPawn,
                 "순수 D100",
-                "d100",
+                BuildD100Expression(modifiedRoll),
                 roll,
                 $"결과 {roll}",
-                "목표값 없음");
+                modifiedRoll.GetCandidateLabel(),
+                _rollVisibility);
             TRPGSessionAuthority.PublishRoll(
                 ownerPawn,
                 PawnRollLogKind.PureD100,
@@ -833,7 +883,7 @@ namespace Trpg.Pawns
 
             if (_boardStackManager == null)
                 _overlay.Hide();
-            _resultWindow.Play(data, () =>
+            PlayModifiedD100Sequence(modifiedRoll, data, () =>
             {
                 ownerState.MarkFinalized();
                 if (_isOpen && _sessionState == ownerState)
@@ -896,7 +946,10 @@ namespace Trpg.Pawns
 
         private void ExecuteCheckRoll(bool isChallenge)
         {
-            var roll = _rollService.RollD100(_source.Regular).Roll;
+            var modifiedRoll = _rollService.RollD100Modified(
+                _source.Regular,
+                _bonusPenaltyLevel);
+            var roll = modifiedRoll.Roll;
             _evaluation = PawnCheckRollRules.Evaluate(
                 _source,
                 _difficulty,
@@ -911,14 +964,15 @@ namespace Trpg.Pawns
                 : "실패";
             var data = new PawnRollWindowData(
                 $"{ResolvePawnName(_currentPawn)} · " +
-                (isChallenge ? "대항 판정" : "판정 굴림"),
+                (isChallenge ? "강행 판정" : "판정 굴림"),
                 $"{_source.DisplayName} · {difficultyLabel} · " +
                 $"목표 {_evaluation.RequiredTarget}",
                 roll,
                 1,
                 100,
                 successLabel,
-                $"굴림 {roll} / 목표 {_evaluation.RequiredTarget} / " +
+                modifiedRoll.GetCandidateLabel() +
+                $" / 목표 {_evaluation.RequiredTarget} / " +
                 $"판정 단계 {gradeLabel}",
                 GetResultColor(_evaluation),
                 1.55f,
@@ -939,12 +993,14 @@ namespace Trpg.Pawns
             PawnRollLogService.RecordRoll(
                 networkLogKind,
                 ownerPawn,
-                isChallenge ? "대항 판정" : "판정 굴림",
+                isChallenge ? "강행 판정" : "판정 굴림",
                 $"{_source.DisplayName} {difficultyLabel} " +
                 $"(목표 {evaluation.RequiredTarget})",
                 roll,
                 successLabel,
-                $"판정 단계 {gradeLabel}");
+                modifiedRoll.GetCandidateLabel() +
+                $" / 판정 단계 {gradeLabel}",
+                _rollVisibility);
             TRPGSessionAuthority.PublishRoll(
                 ownerPawn,
                 networkLogKind,
@@ -952,12 +1008,102 @@ namespace Trpg.Pawns
 
             if (_boardStackManager == null)
                 _overlay.Hide();
-            _resultWindow.Play(
+            PlayModifiedD100Sequence(
+                modifiedRoll,
                 data,
                 () => HandleCheckPresentationCompleted(
                     ownerState,
                     evaluation,
                     isChallenge));
+        }
+
+        private static string BuildD100Expression(
+            D100ModifiedRollResult result)
+        {
+            if (result == null || result.BonusPenaltyLevel == 0)
+                return "d100";
+            return result.BonusPenaltyLevel > 0
+                ? $"d100 + 보너스 {result.BonusPenaltyLevel}"
+                : $"d100 + 페널티 {-result.BonusPenaltyLevel}";
+        }
+
+        private void PlayModifiedD100Sequence(
+            D100ModifiedRollResult modifiedRoll,
+            PawnRollWindowData finalData,
+            Action completed)
+        {
+            if (_resultWindow == null)
+            {
+                completed?.Invoke();
+                return;
+            }
+
+            if (modifiedRoll == null ||
+                !modifiedRoll.HasAdditionalTensDice)
+            {
+                _resultWindow.Play(finalData, completed);
+                return;
+            }
+
+            var baseData = new PawnRollWindowData(
+                finalData.Title,
+                "기본 d100",
+                modifiedRoll.BaseRoll,
+                1,
+                100,
+                $"기본 결과 {modifiedRoll.BaseRoll}",
+                "추가 십의 자리 주사위를 굴립니다.",
+                finalData.ResultColor,
+                1.05f,
+                finalData.ResultTone);
+            _resultWindow.Play(
+                baseData,
+                () => PlayAdditionalTensDie(
+                    modifiedRoll,
+                    finalData,
+                    1,
+                    completed));
+        }
+
+        private void PlayAdditionalTensDie(
+            D100ModifiedRollResult modifiedRoll,
+            PawnRollWindowData finalData,
+            int tensIndex,
+            Action completed)
+        {
+            if (_resultWindow == null)
+            {
+                completed?.Invoke();
+                return;
+            }
+
+            if (tensIndex >= modifiedRoll.TensDice.Count)
+            {
+                _resultWindow.ShowInstant(finalData);
+                completed?.Invoke();
+                return;
+            }
+
+            var tens = modifiedRoll.TensDice[tensIndex];
+            var candidate = modifiedRoll.CandidateRolls[tensIndex];
+            var extraData = new PawnRollWindowData(
+                finalData.Title,
+                $"{modifiedRoll.ModifierLabel} · 추가 십의 자리",
+                tens,
+                0,
+                9,
+                $"추가 후보 {candidate}",
+                modifiedRoll.GetCandidateLabel(),
+                finalData.ResultColor,
+                0.72f,
+                finalData.ResultTone);
+            _resultWindow.Play(
+                extraData,
+                () => PlayAdditionalTensDie(
+                    modifiedRoll,
+                    finalData,
+                    tensIndex + 1,
+                    completed));
         }
 
         private void HandleCheckPresentationCompleted(
@@ -989,7 +1135,7 @@ namespace Trpg.Pawns
                     _resultWindow.HideFailureActions();
                     ShowSessionStatus(
                         isChallenge
-                            ? "대항 판정 결과가 캐릭터에 저장되었습니다."
+                            ? "강행 판정 결과가 캐릭터에 저장되었습니다."
                             : "대실패 결과가 캐릭터에 저장되었습니다.");
                 }
                 return;

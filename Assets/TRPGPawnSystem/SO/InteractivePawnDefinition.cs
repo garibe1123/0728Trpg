@@ -144,6 +144,28 @@ namespace Trpg.Pawns
             "선택 상태에서 적용할 Pawn 균일 확대 배율")]
         private float _selectedScale = 1.08f;
 
+        [Header("Visual")]
+        [SerializeField, Tooltip(
+            "Legacy는 기존 SpriteRenderer, Modular Character는 파츠 조립, " +
+            "Simple Sprite는 단일 Sprite와 Portrait만 사용합니다.")]
+        private PawnVisualMode _visualMode = PawnVisualMode.Legacy;
+
+        [FormerlySerializedAs("_useModularSpriteMotion")]
+        [FormerlySerializedAs("_usePawnSpriteAnimator")]
+        [SerializeField, HideInInspector]
+        private bool _legacyUseModularSpriteMotion;
+
+        [SerializeField, HideInInspector]
+        private bool _visualModeMigrated;
+
+        [SerializeField, Tooltip(
+            "Simple Sprite 모드에서 사용할 단일 월드 Sprite와 Portrait SO")]
+        private SimplePawnVisualDefinition _simpleVisual;
+
+        [SerializeField, Tooltip(
+            "Modular Character 모드에서 사용할 기본 파츠 및 팔레트 구성")]
+        private PawnAppearance _defaultAppearance = PawnAppearance.Default;
+
         private readonly List<StatBaseValue> _baseStatCache =
             new List<StatBaseValue>();
 
@@ -175,7 +197,18 @@ namespace Trpg.Pawns
         public string DisplayName => _displayName;
         public string Description => _description;
         public string GmInstructions => _gmInstructions;
-        public Sprite Portrait => _portrait;
+        public PawnVisualMode VisualMode => ResolveVisualMode();
+        public SimplePawnVisualDefinition SimpleVisual => _simpleVisual;
+        public Sprite SimpleWorldSprite =>
+            VisualMode == PawnVisualMode.SimpleSprite && _simpleVisual != null
+                ? _simpleVisual.WorldSprite
+                : null;
+        public Sprite Portrait =>
+            VisualMode == PawnVisualMode.SimpleSprite &&
+            _simpleVisual != null &&
+            _simpleVisual.Portrait != null
+                ? _simpleVisual.Portrait
+                : _portrait;
         public StatRuleTemplate StatRuleTemplateAsset => _statRuleTemplate;
         public IStatRuleTemplate EffectiveStatRuleTemplate =>
             _statRuleTemplate != null
@@ -240,6 +273,23 @@ namespace Trpg.Pawns
             Mathf.Clamp(_presentationRotationDegrees, 0f, 30f);
         public float SelectedScale =>
             Mathf.Clamp(_selectedScale, 1f, 2f);
+        public bool UseModularSpriteMotion =>
+            VisualMode == PawnVisualMode.ModularCharacter;
+        public bool UseSimpleSpriteVisual =>
+            VisualMode == PawnVisualMode.SimpleSprite;
+        public PawnAppearance DefaultAppearance =>
+            _defaultAppearance.WithVisibleColorDefaults();
+
+        private PawnVisualMode ResolveVisualMode()
+        {
+            if (IsDoor)
+                return PawnVisualMode.Legacy;
+
+            if (!_visualModeMigrated && _legacyUseModularSpriteMotion)
+                return PawnVisualMode.ModularCharacter;
+
+            return _visualMode;
+        }
 
         public bool TryGetDefaultStatValue(
             StatRole role,
@@ -426,6 +476,20 @@ namespace Trpg.Pawns
 #if UNITY_EDITOR
         private void OnValidate()
         {
+            if (!_visualModeMigrated)
+            {
+                if (_legacyUseModularSpriteMotion)
+                    _visualMode = PawnVisualMode.ModularCharacter;
+                _legacyUseModularSpriteMotion = false;
+                _visualModeMigrated = true;
+            }
+
+            if (_kind == InteractivePawnKind.Door)
+                _visualMode = PawnVisualMode.Legacy;
+
+            _defaultAppearance =
+                _defaultAppearance.WithVisibleColorDefaults();
+
             if (_kind == InteractivePawnKind.Moveable &&
                 _moveableKind == MoveablePawnKind.LegacyWalkableNpc)
             {

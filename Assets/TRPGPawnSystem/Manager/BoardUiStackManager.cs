@@ -342,6 +342,10 @@ namespace Trpg.Pawns
             _widget.SourceDropped += HandleSourceDropped;
             _widget.DifficultyRequested += HandleDifficultyRequested;
             _widget.RollRequested += HandleRollRequested;
+            _widget.BonusPenaltyChanged +=
+                HandleBonusPenaltyChanged;
+            _widget.VisibilityChanged +=
+                HandleRollVisibilityChanged;
         }
 
         private void UnbindWidget()
@@ -359,6 +363,10 @@ namespace Trpg.Pawns
             _widget.SourceDropped -= HandleSourceDropped;
             _widget.DifficultyRequested -= HandleDifficultyRequested;
             _widget.RollRequested -= HandleRollRequested;
+            _widget.BonusPenaltyChanged -=
+                HandleBonusPenaltyChanged;
+            _widget.VisibilityChanged -=
+                HandleRollVisibilityChanged;
         }
 
 
@@ -672,6 +680,19 @@ namespace Trpg.Pawns
             _checkRollManager?.SetDifficultyFromBoardStack(difficulty);
         }
 
+        private void HandleBonusPenaltyChanged(int value)
+        {
+            EnsureCheckSession();
+            _checkRollManager?.SetBonusPenaltyFromBoardStack(value);
+        }
+
+        private void HandleRollVisibilityChanged(
+            RollVisibility visibility)
+        {
+            EnsureCheckSession();
+            _checkRollManager?.SetVisibilityFromBoardStack(visibility);
+        }
+
         private void HandleRollRequested()
         {
             EnsureCheckSession();
@@ -682,6 +703,10 @@ namespace Trpg.Pawns
                 _checkRollManager?.SetDifficultyFromBoardStack(
                     _widget.SelectedDifficulty);
             }
+            _checkRollManager?.SetBonusPenaltyFromBoardStack(
+                _widget.BonusPenalty);
+            _checkRollManager?.SetVisibilityFromBoardStack(
+                _widget.Visibility);
             _checkRollManager?.RollFromBoardStack();
         }
 

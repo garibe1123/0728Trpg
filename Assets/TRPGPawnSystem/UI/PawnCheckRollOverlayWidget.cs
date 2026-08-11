@@ -37,6 +37,10 @@ namespace Trpg.Pawns
         private Text _regularButtonText;
         private Text _hardButtonText;
         private Text _extremeButtonText;
+        private Text _modifierText;
+        private Text _visibilityText;
+        private int _bonusPenaltyLevel;
+        private bool _secretRoll;
         private GameObject _resultSection;
         private Text _counterText;
         private Text _resultText;
@@ -60,6 +64,8 @@ namespace Trpg.Pawns
         public event Action<PawnCheckSourceData> SourceDropped;
         public event Action<PawnCheckDifficulty>
             DifficultyRequested;
+        public event Action<int> BonusPenaltyChanged;
+        public event Action<RollVisibility> VisibilityChanged;
         public event Action ClearSourceRequested;
         public event Action AcceptRequested;
         public event Action ChallengeRequested;
@@ -67,6 +73,11 @@ namespace Trpg.Pawns
         public event Action<PawnCheckConfirmationKind>
             ConfirmationAccepted;
         public event Action CloseRequested;
+
+        public int BonusPenaltyLevel => _bonusPenaltyLevel;
+        public RollVisibility Visibility => _secretRoll
+            ? RollVisibility.RollerAndGameMaster
+            : RollVisibility.Public;
 
         public static PawnCheckRollOverlayWidget CreateRuntime(
             Canvas rootCanvas,
@@ -98,6 +109,9 @@ namespace Trpg.Pawns
             gameObject.SetActive(true);
             transform.SetAsLastSibling();
             _confirmationKind = PawnCheckConfirmationKind.None;
+            _bonusPenaltyLevel = 0;
+            _secretRoll = false;
+            RefreshRollOptions();
             SetText(_statusText,
                 "D100을 바로 굴리거나 스탯·스킬을 선택하세요.");
             _sourceSection.SetActive(false);
@@ -470,6 +484,49 @@ namespace Trpg.Pawns
             dropButton.onClick.AddListener(
                 () => PureRollRequested?.Invoke());
 
+            var modifierRect = CreateSection(
+                "BonusPenalty",
+                58f,
+                new Color(0.04f, 0.11f, 0.14f, 1f));
+            var modifierLayout = modifierRect.gameObject.AddComponent<
+                HorizontalLayoutGroup>();
+            modifierLayout.padding = new RectOffset(8, 8, 8, 8);
+            modifierLayout.spacing = 8f;
+            modifierLayout.childControlWidth = true;
+            modifierLayout.childControlHeight = true;
+            modifierLayout.childForceExpandWidth = true;
+            modifierLayout.childForceExpandHeight = true;
+            var penaltyButton = CreateButton(
+                "Penalty",
+                modifierRect,
+                "페널티 +",
+                new Color(0.34f, 0.10f, 0.08f, 1f),
+                out _);
+            var resetButton = CreateButton(
+                "ModifierState",
+                modifierRect,
+                "보통",
+                new Color(0.08f, 0.20f, 0.24f, 1f),
+                out _modifierText);
+            var bonusButton = CreateButton(
+                "Bonus",
+                modifierRect,
+                "보너스 +",
+                new Color(0.08f, 0.28f, 0.18f, 1f),
+                out _);
+            penaltyButton.onClick.AddListener(() => ChangeModifier(-1));
+            resetButton.onClick.AddListener(() => SetModifier(0));
+            bonusButton.onClick.AddListener(() => ChangeModifier(1));
+
+            var visibilityButton = CreateSectionButton(
+                "RollVisibility",
+                52f,
+                "공개 굴림 · 모든 참가자에게 표시",
+                new Color(0.06f, 0.18f, 0.22f, 1f));
+            _visibilityText = visibilityButton.GetComponentInChildren<Text>();
+            visibilityButton.onClick.AddListener(ToggleVisibility);
+            RefreshRollOptions();
+
             var dropZone = CreateSection(
                 "DropZone",
                 62f,
@@ -620,7 +677,7 @@ namespace Trpg.Pawns
             _challengeButton = CreateButton(
                 "Challenge",
                 failureRect,
-                "대항한다",
+                "강행한다",
                 new Color(0.28f, 0.17f, 0.05f, 1f),
                 out _challengeButtonText);
             _luckButton = CreateButton(
@@ -839,6 +896,61 @@ namespace Trpg.Pawns
             _confirmationSection.SetActive(false);
             ConfirmationAccepted?.Invoke(kind);
             RebuildContent();
+        }
+
+        public void SetRollOptions(
+            int bonusPenaltyLevel,
+            RollVisibility visibility)
+        {
+            _bonusPenaltyLevel = Mathf.Clamp(
+                bonusPenaltyLevel,
+                -2,
+                2);
+            _secretRoll =
+                visibility == RollVisibility.RollerAndGameMaster;
+            RefreshRollOptions();
+        }
+
+        private void ChangeModifier(int delta)
+        {
+            SetModifier(_bonusPenaltyLevel + delta);
+        }
+
+        private void SetModifier(int value)
+        {
+            var clamped = Mathf.Clamp(value, -2, 2);
+            if (_bonusPenaltyLevel == clamped)
+                return;
+
+            _bonusPenaltyLevel = clamped;
+            RefreshRollOptions();
+            BonusPenaltyChanged?.Invoke(_bonusPenaltyLevel);
+        }
+
+        private void ToggleVisibility()
+        {
+            _secretRoll = !_secretRoll;
+            RefreshRollOptions();
+            VisibilityChanged?.Invoke(Visibility);
+        }
+
+        private void RefreshRollOptions()
+        {
+            if (_modifierText != null)
+            {
+                _modifierText.text = _bonusPenaltyLevel > 0
+                    ? $"보너스 {_bonusPenaltyLevel}"
+                    : _bonusPenaltyLevel < 0
+                        ? $"페널티 {-_bonusPenaltyLevel}"
+                        : "보통";
+            }
+
+            if (_visibilityText != null)
+            {
+                _visibilityText.text = _secretRoll
+                    ? "비밀 굴림 · 굴린 플레이어와 GM만 표시"
+                    : "공개 굴림 · 모든 참가자에게 표시";
+            }
         }
 
         private void SetDifficultyInteractable(bool value)

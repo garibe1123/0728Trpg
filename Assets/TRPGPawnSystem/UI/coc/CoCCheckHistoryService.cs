@@ -4,6 +4,240 @@ using System.Globalization;
 
 namespace Trpg.Domain.Dice
 {
+    /// <summary>
+    /// CoC 7판 D100 판정의 성공 단계입니다.
+    /// 저장 데이터와 비교가 안정적이도록 명시적인 순서를 유지합니다.
+    /// </summary>
+    public enum CoCCheckOutcome
+    {
+        Invalid = 0,
+        Fumble = 1,
+        Failure = 2,
+        Success = 3,
+        HardSuccess = 4,
+        ExtremeSuccess = 5,
+        CriticalSuccess = 6
+    }
+
+    /// <summary>
+    /// 각 판정 기록을 기준으로 본 대항 판정 결과입니다.
+    /// </summary>
+    public enum CoCOpposedResult
+    {
+        Invalid = 0,
+        Win = 1,
+        Lose = 2,
+        Draw = 3
+    }
+
+    /// <summary>
+    /// Unity API에 의존하지 않는 CoC 7판 판정 규칙 모음입니다.
+    /// </summary>
+    public static class CoCCheckRules
+    {
+        private const int MinimumTarget = 1;
+        private const int MaximumTarget = 100;
+        private const int MinimumRoll = 1;
+        private const int MaximumRoll = 100;
+        private const int LowSkillFumbleThreshold = 50;
+        private const int LowSkillFumbleMinimum = 96;
+
+        public static CoCCheckOutcome Evaluate(int target, int roll)
+        {
+            if (!IsValidTarget(target) || !IsValidRoll(roll))
+                return CoCCheckOutcome.Invalid;
+
+            if (roll == MaximumRoll ||
+                target < LowSkillFumbleThreshold &&
+                roll >= LowSkillFumbleMinimum)
+            {
+                return CoCCheckOutcome.Fumble;
+            }
+
+            if (roll == MinimumRoll)
+                return CoCCheckOutcome.CriticalSuccess;
+
+            if (roll <= GetExtremeTarget(target))
+                return CoCCheckOutcome.ExtremeSuccess;
+
+            if (roll <= GetHardTarget(target))
+                return CoCCheckOutcome.HardSuccess;
+
+            return roll <= target
+                ? CoCCheckOutcome.Success
+                : CoCCheckOutcome.Failure;
+        }
+
+        public static bool CanPush(CoCCheckOutcome outcome)
+        {
+            return outcome == CoCCheckOutcome.Failure;
+        }
+
+        /// <summary>
+        /// 현재 결과를 바로 다음 성공 단계로 올리는 데 필요한 최소 Luck입니다.
+        /// 실패는 일반 성공, 일반 성공은 어려운 성공, 어려운 성공은 극단적 성공을
+        /// 목표로 합니다. 대성공은 Luck으로 만들 수 없으므로 나머지는 0입니다.
+        /// </summary>
+        public static int GetSuggestedLuckSpend(
+            int target,
+            int roll,
+            CoCCheckOutcome outcome)
+        {
+            if (!IsValidTarget(target) || !IsValidRoll(roll))
+                return 0;
+
+            int requiredRoll;
+            switch (outcome)
+            {
+                case CoCCheckOutcome.Failure:
+                    requiredRoll = target;
+                    break;
+                case CoCCheckOutcome.Success:
+                    requiredRoll = GetHardTarget(target);
+                    break;
+                case CoCCheckOutcome.HardSuccess:
+                    requiredRoll = GetExtremeTarget(target);
+                    break;
+                default:
+                    return 0;
+            }
+
+            return Math.Max(0, roll - requiredRoll);
+        }
+
+        /// <summary>
+        /// 첫 번째 판정 기록의 관점에서 대항 결과를 반환합니다.
+        /// 성공 단계가 우선이며, 같은 단계에서는 높은 목표값, 그 다음 낮은
+        /// 주사위 결과를 우선합니다. 양쪽 모두 실패하면 승자 없이 Draw입니다.
+        /// </summary>
+        public static CoCOpposedResult CompareOpposed(
+            int firstTarget,
+            int firstRoll,
+            CoCCheckOutcome firstOutcome,
+            int secondTarget,
+            int secondRoll,
+            CoCCheckOutcome secondOutcome)
+        {
+            if (!IsConsistent(
+                    firstTarget,
+                    firstRoll,
+                    firstOutcome) ||
+                !IsConsistent(
+                    secondTarget,
+                    secondRoll,
+                    secondOutcome))
+            {
+                return CoCOpposedResult.Invalid;
+            }
+
+            var firstSucceeded = IsSuccess(firstOutcome);
+            var secondSucceeded = IsSuccess(secondOutcome);
+
+            if (firstSucceeded != secondSucceeded)
+            {
+                return firstSucceeded
+                    ? CoCOpposedResult.Win
+                    : CoCOpposedResult.Lose;
+            }
+
+            if (!firstSucceeded)
+                return CoCOpposedResult.Draw;
+
+            var firstRank = GetSuccessRank(firstOutcome);
+            var secondRank = GetSuccessRank(secondOutcome);
+            if (firstRank != secondRank)
+            {
+                return firstRank > secondRank
+                    ? CoCOpposedResult.Win
+                    : CoCOpposedResult.Lose;
+            }
+
+            if (firstTarget != secondTarget)
+            {
+                return firstTarget > secondTarget
+                    ? CoCOpposedResult.Win
+                    : CoCOpposedResult.Lose;
+            }
+
+            if (firstRoll != secondRoll)
+            {
+                return firstRoll < secondRoll
+                    ? CoCOpposedResult.Win
+                    : CoCOpposedResult.Lose;
+            }
+
+            return CoCOpposedResult.Draw;
+        }
+
+        public static CoCOpposedResult Invert(
+            CoCOpposedResult result)
+        {
+            switch (result)
+            {
+                case CoCOpposedResult.Win:
+                    return CoCOpposedResult.Lose;
+                case CoCOpposedResult.Lose:
+                    return CoCOpposedResult.Win;
+                default:
+                    return result;
+            }
+        }
+
+        private static int GetHardTarget(int target)
+        {
+            return Math.Max(MinimumTarget, target / 2);
+        }
+
+        private static int GetExtremeTarget(int target)
+        {
+            return Math.Max(MinimumTarget, target / 5);
+        }
+
+        private static bool IsSuccess(CoCCheckOutcome outcome)
+        {
+            return outcome == CoCCheckOutcome.Success ||
+                   outcome == CoCCheckOutcome.HardSuccess ||
+                   outcome == CoCCheckOutcome.ExtremeSuccess ||
+                   outcome == CoCCheckOutcome.CriticalSuccess;
+        }
+
+        private static int GetSuccessRank(CoCCheckOutcome outcome)
+        {
+            switch (outcome)
+            {
+                case CoCCheckOutcome.CriticalSuccess:
+                    return 4;
+                case CoCCheckOutcome.ExtremeSuccess:
+                    return 3;
+                case CoCCheckOutcome.HardSuccess:
+                    return 2;
+                case CoCCheckOutcome.Success:
+                    return 1;
+                default:
+                    return 0;
+            }
+        }
+
+        private static bool IsConsistent(
+            int target,
+            int roll,
+            CoCCheckOutcome outcome)
+        {
+            return outcome != CoCCheckOutcome.Invalid &&
+                   Evaluate(target, roll) == outcome;
+        }
+
+        private static bool IsValidTarget(int target)
+        {
+            return target >= MinimumTarget && target <= MaximumTarget;
+        }
+
+        private static bool IsValidRoll(int roll)
+        {
+            return roll >= MinimumRoll && roll <= MaximumRoll;
+        }
+    }
+
     public enum CoCCheckKind
     {
         Standard,

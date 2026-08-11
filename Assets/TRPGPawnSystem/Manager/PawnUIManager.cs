@@ -104,6 +104,10 @@ namespace Trpg.Pawns
         private PawnInventoryWidget _inventoryWidget;
         private PawnProfileState _boundProfileState;
         private PawnProfileWidget _profileWidget;
+        private PawnConditionWidget _conditionWidget;
+        private PawnProfileSection _conditionSection =
+            PawnProfileSection.OtherNotes;
+        private string _conditionTitle = "상태 관리";
         private PublicHandoutState _publicHandoutState;
         private PublicHandoutWidget _handoutWidget;
         private Button _handoutButton;
@@ -122,6 +126,8 @@ namespace Trpg.Pawns
         private bool _boundSupportsSkills;
         private bool _boundSupportsInventory;
         private bool _boundSupportsProfile;
+        private bool _hasRuntimeRuleSet;
+        private CampaignRuleSet _runtimeRuleSet;
 
         public PawnInfoBarWidget InfoBar => _infoBar;
         public PawnManager PawnManager => _pawnManager;
@@ -137,6 +143,30 @@ namespace Trpg.Pawns
         public int EffectDiceModifier => _effectDiceModifier;
         public bool CanCurrentCharacterRoll =>
             _boundCharacterCanRoll;
+        public CampaignRuleSet RuleSet => _hasRuntimeRuleSet
+            ? _runtimeRuleSet
+            : _settings != null
+                ? _settings.RuleSet
+                : CampaignRuleSet.Generic;
+        public bool UsesCallOfCthulhuRules =>
+            RuleSet == CampaignRuleSet.CallOfCthulhu7E;
+
+        public void ApplyCampaignRuleSet(CampaignRuleSet ruleSet)
+        {
+            _runtimeRuleSet = ruleSet;
+            _hasRuntimeRuleSet = true;
+            _infoBar?.SetUsesCallOfCthulhuRules(
+                UsesCallOfCthulhuRules);
+            RefreshStatUi();
+
+            var authority = TRPGSessionAuthority.Instance;
+            if (authority != null &&
+                authority.IsOnline &&
+                authority.IsLocalGameMaster)
+            {
+                authority.PublishHostCampaignRuleSet(ruleSet);
+            }
+        }
 
         public void ConfigureNetworkManager(
             TRPGNetworkGameManager networkGameManager)
@@ -244,6 +274,9 @@ namespace Trpg.Pawns
                 _infoBar = PawnInfoBarWidget.CreateRuntime(_settings);
             }
 
+            _infoBar.SetUsesCallOfCthulhuRules(
+                UsesCallOfCthulhuRules);
+
             var seed = unchecked(
                 Environment.TickCount * 397 ^ GetInstanceID());
             _rollService = new PawnRollService(seed);
@@ -302,6 +335,10 @@ namespace Trpg.Pawns
             _infoBar.StatRerollRequested +=
                 HandleStatRerollRequested;
             _infoBar.EffectRollRequested += HandleEffectRollRequested;
+            _infoBar.ResourceRollRequested +=
+                HandleResourceRollRequested;
+            _infoBar.ResourceConditionRequested +=
+                HandleResourceConditionRequested;
             _infoBar.RollPresentationCompleted +=
                 HandleRollPresentationCompleted;
             _infoBar.StatValueEditRequested +=
@@ -375,6 +412,10 @@ namespace Trpg.Pawns
                 _infoBar.StatRerollRequested -=
                     HandleStatRerollRequested;
                 _infoBar.EffectRollRequested -= HandleEffectRollRequested;
+                _infoBar.ResourceRollRequested -=
+                    HandleResourceRollRequested;
+                _infoBar.ResourceConditionRequested -=
+                    HandleResourceConditionRequested;
                 _infoBar.RollPresentationCompleted -=
                     HandleRollPresentationCompleted;
                 _infoBar.StatValueEditRequested -=
@@ -412,6 +453,7 @@ namespace Trpg.Pawns
                 _profileWidget?.Hide();
             UnbindHandoutSystem();
             _handoutWidget?.Hide();
+            _conditionWidget?.Hide();
             if (_handoutButton != null)
                 _handoutButton.gameObject.SetActive(false);
             UnbindWalkButton();
@@ -439,8 +481,30 @@ namespace Trpg.Pawns
                 _profileWidget = null;
             }
 
+
+            if (_conditionWidget != null)
+            {
+                _conditionWidget.AddRequested -=
+                    HandleConditionAddRequested;
+                _conditionWidget.RemoveRequested -=
+                    HandleConditionRemoveRequested;
+                _conditionWidget.CloseRequested -=
+                    HandleConditionCloseRequested;
+                Destroy(_conditionWidget.gameObject);
+                _conditionWidget = null;
+            }
+
             if (_handoutWidget != null)
             {
+                _handoutWidget.AddRequested -=
+                    HandleHandoutAddRequested;
+                _handoutWidget.RemoveRequested -=
+                    HandleHandoutRemoveRequested;
+                _handoutWidget.MoveRequested -=
+                    HandleHandoutMoveRequested;
+                _handoutWidget.Opened -= HandleHandoutOpened;
+                _handoutWidget.CloseRequested -=
+                    HandleHandoutCloseRequested;
                 Destroy(_handoutWidget.gameObject);
                 _handoutWidget = null;
             }
@@ -529,6 +593,8 @@ namespace Trpg.Pawns
             InteractivePawn pawn)
         {
             FlushPendingEdits();
+            _infoBar?.CancelRollPresentation();
+            _conditionWidget?.Hide();
             _deferredStatRefresh = false;
             _deferredProfileRefresh = false;
             _boundCharacterCanEdit = false;
@@ -554,9 +620,11 @@ namespace Trpg.Pawns
             if (pawn == null || pawn.Definition == null)
             {
                 PlayerStatState.SetActive(null);
+                _infoBar.SetResourceConditionEditingEnabled(false);
                 _infoBar.Unbind();
                 RefreshWalkButton(null);
                 RefreshRollButtons(null);
+                RefreshHandoutUi();
                 return;
             }
 
@@ -606,6 +674,8 @@ namespace Trpg.Pawns
                 CanMoveCharacter(pawn));
 
             _infoBar.Bind(infoData);
+            _infoBar.SetResourceConditionEditingEnabled(
+                _boundCharacterCanEdit);
 
             if (!_boundHasFullCharacterSheet)
             {
@@ -614,6 +684,7 @@ namespace Trpg.Pawns
                 RefreshMovementBudget(pawn);
                 RefreshWalkButton(pawn);
                 RefreshRollButtons(pawn);
+                RefreshHandoutUi();
                 return;
             }
 
@@ -659,6 +730,7 @@ namespace Trpg.Pawns
             RefreshMovementBudget(pawn);
             RefreshWalkButton(pawn);
             RefreshRollButtons(pawn);
+            RefreshHandoutUi();
         }
 
         public void StartWalking()
@@ -830,6 +902,7 @@ namespace Trpg.Pawns
 
         private void HandleBoundProfileStateChanged()
         {
+            RefreshConditionWidget();
             if (_profileWidget == null ||
                 !_profileWidget.IsVisible)
             {
@@ -1016,7 +1089,10 @@ namespace Trpg.Pawns
                     $"[{name}] 스킬을 추가하지 못했습니다. {error}",
                     _boundSkillState);
                 RefreshStatUi();
+                return;
             }
+
+            PublishSkillStateChange();
         }
 
         private void HandleSkillNameEditRequested(
@@ -1031,7 +1107,10 @@ namespace Trpg.Pawns
                     request.DisplayName))
             {
                 RefreshStatUi();
+                return;
             }
+
+            PublishSkillStateChange();
         }
 
         private void HandleSkillRegularEditRequested(
@@ -1046,7 +1125,10 @@ namespace Trpg.Pawns
                     request.RegularValue))
             {
                 RefreshStatUi();
+                return;
             }
+
+            PublishSkillStateChange();
         }
 
         private void HandleSkillRemoveRequested(
@@ -1059,7 +1141,29 @@ namespace Trpg.Pawns
                 !_boundSkillState.TryRemove(request.SkillId))
             {
                 RefreshStatUi();
+                return;
             }
+
+            PublishSkillStateChange();
+        }
+
+        private void PublishSkillStateChange()
+        {
+            var pawn = _pawnManager != null
+                ? _pawnManager.SelectedInteractive
+                : null;
+            var authority = TRPGSessionAuthority.Instance;
+            if (pawn == null || authority == null || !authority.IsOnline)
+                return;
+
+            if (authority.ShouldRouteClientSkillChange)
+            {
+                authority.RequestSkillSnapshot(pawn);
+                return;
+            }
+
+            if (authority.IsLocalGameMaster)
+                authority.PublishHostSkillSnapshot(pawn);
         }
 
         private void BindHandoutSystem()
@@ -1225,6 +1329,8 @@ namespace Trpg.Pawns
                 HandleHandoutRemoveRequested;
             _handoutWidget.MoveRequested +=
                 HandleHandoutMoveRequested;
+            _handoutWidget.Opened +=
+                HandleHandoutOpened;
             _handoutWidget.CloseRequested +=
                 HandleHandoutCloseRequested;
         }
@@ -1235,25 +1341,78 @@ namespace Trpg.Pawns
             if (_publicHandoutState == null)
                 return;
 
-            if (!_publicHandoutState.TryAdd(
+            var authority = TRPGSessionAuthority.Instance;
+            if (authority != null &&
+                authority.IsOnline &&
+                !authority.IsLocalGameMaster)
+            {
+                Debug.LogWarning(
+                    $"[{name}] 핸드아웃 공개는 GM만 변경할 수 있습니다.",
+                    this);
+                RefreshHandoutUi();
+                return;
+            }
+
+            var pawn = _pawnManager != null
+                ? _pawnManager.SelectedInteractive
+                : null;
+            if (!_publicHandoutState.TryGrantToPawn(
+                    pawn,
                     definition,
                     out var error))
             {
                 Debug.LogWarning(
-                    $"[{name}] 핸드아웃을 공개하지 못했습니다. " +
-                    error,
+                    $"[{name}] 선택 Pawn에게 핸드아웃을 공개하지 " +
+                    $"못했습니다. {error}",
                     this);
                 RefreshHandoutUi();
+                return;
             }
+
+            if (authority != null && authority.IsOnline)
+            {
+                authority.PublishHostHandoutRecord(
+                    pawn,
+                    definition != null ? definition.Id : string.Empty);
+            }
+
+            RefreshHandoutUi();
         }
 
         private void HandleHandoutRemoveRequested(string definitionId)
         {
+            var authority = TRPGSessionAuthority.Instance;
+            if (authority != null &&
+                authority.IsOnline &&
+                !authority.IsLocalGameMaster)
+            {
+                Debug.LogWarning(
+                    $"[{name}] 핸드아웃 공개는 GM만 변경할 수 있습니다.",
+                    this);
+                RefreshHandoutUi();
+                return;
+            }
+
+            var pawn = _pawnManager != null
+                ? _pawnManager.SelectedInteractive
+                : null;
             if (_publicHandoutState == null ||
-                !_publicHandoutState.TryRemove(definitionId))
+                !_publicHandoutState.TryRevokeFromPawn(
+                    pawn,
+                    definitionId))
             {
                 RefreshHandoutUi();
+                return;
             }
+
+            if (authority != null && authority.IsOnline)
+            {
+                authority.PublishHostHandoutRecord(
+                    pawn,
+                    definitionId);
+            }
+
+            RefreshHandoutUi();
         }
 
         private void HandleHandoutMoveRequested(
@@ -1269,6 +1428,29 @@ namespace Trpg.Pawns
             }
         }
 
+        private void HandleHandoutOpened(string definitionId)
+        {
+            var pawn = _pawnManager != null
+                ? _pawnManager.SelectedInteractive
+                : null;
+            if (_publicHandoutState == null || pawn == null)
+                return;
+
+            var authority = TRPGSessionAuthority.Instance;
+            if (authority == null || !authority.IsOnline)
+            {
+                _publicHandoutState.MarkOpened(pawn, definitionId);
+                return;
+            }
+
+            // GM의 미리보기는 조사자의 열람 기록으로 취급하지 않습니다.
+            if (authority.IsLocalGameMaster)
+                return;
+
+            _publicHandoutState.MarkOpened(pawn, definitionId);
+            authority.RequestHandoutOpened(pawn, definitionId);
+        }
+
         private void HandleHandoutCloseRequested()
         {
             _handoutWidget?.Hide();
@@ -1282,9 +1464,20 @@ namespace Trpg.Pawns
                 return;
             }
 
+            var pawn = _pawnManager != null
+                ? _pawnManager.SelectedInteractive
+                : null;
+            var contextId = pawn != null
+                ? !string.IsNullOrWhiteSpace(pawn.InstanceId)
+                    ? pawn.InstanceId
+                    : pawn.Definition != null
+                        ? pawn.Definition.Id
+                        : string.Empty
+                : string.Empty;
             _handoutWidget.Bind(
-                _publicHandoutState.Handouts,
-                _handoutCatalog);
+                _publicHandoutState.GetAvailableForPawn(pawn),
+                _handoutCatalog,
+                contextId);
         }
 
         private void HandleProfileRequested()
@@ -2553,18 +2746,23 @@ namespace Trpg.Pawns
                 return;
             }
 
-            var target = ResolveCheckTarget(pawn);
-            var result = _rollService.RollD100(target);
+            var target = Mathf.Clamp(request.Target, 1, 100);
+            var modifiedRoll = _rollService.RollD100Modified(
+                target,
+                request.BonusPenaltyLevel);
+            var result = modifiedRoll.SelectedResult;
             var presentation = new PawnRollPresentationData(
                 "판정 굴림",
-                $"d100 / 목표 {target}",
+                BuildD100Expression(modifiedRoll) + $" / 목표 {target}",
                 result.Roll,
                 1,
                 100,
                 GetCheckResultLabel(result.Grade),
-                $"굴림 {result.Roll} / 목표 {target}",
+                modifiedRoll.GetCandidateLabel() +
+                $" / 목표 {target}",
                 GetCheckResultColor(result.Grade),
-                1.55f);
+                1.55f,
+                target);
             PawnRollLogService.RecordRoll(
                 PawnRollLogKind.Check,
                 pawn,
@@ -2572,12 +2770,13 @@ namespace Trpg.Pawns
                 presentation.Expression,
                 presentation.FinalValue,
                 presentation.ResultLabel,
-                presentation.DetailLabel);
+                presentation.DetailLabel,
+                request.Visibility);
             TRPGSessionAuthority.PublishRoll(
                 pawn,
                 PawnRollLogKind.Check,
                 presentation);
-            _infoBar.PlayRoll(presentation);
+            _infoBar.PlayModifiedD100(modifiedRoll, presentation);
         }
 
         private void HandleEffectRollRequested(
@@ -2622,12 +2821,504 @@ namespace Trpg.Pawns
                 presentation.Expression,
                 presentation.FinalValue,
                 presentation.ResultLabel,
-                presentation.DetailLabel);
+                presentation.DetailLabel,
+                request.Visibility);
             TRPGSessionAuthority.PublishRoll(
                 pawn,
                 PawnRollLogKind.Effect,
                 presentation);
             _infoBar.PlayRoll(presentation);
+        }
+
+        private void HandleResourceConditionRequested(
+            PawnResourceValueData resource)
+        {
+            if (!_boundCharacterCanEdit)
+                return;
+
+            var pawn = _pawnManager != null
+                ? _pawnManager.SelectedInteractive
+                : null;
+            if (pawn == null || pawn.Definition == null)
+                return;
+
+            if (_boundProfileState == null)
+            {
+                BindProfileState(
+                    PawnProfileState.ResolveOrCreate(
+                        pawn.gameObject,
+                        pawn.Definition));
+            }
+            if (_boundProfileState == null)
+            {
+                Debug.LogWarning(
+                    $"[{name}] 상태를 저장할 캐릭터 프로필을 " +
+                    "생성하지 못했습니다.",
+                    this);
+                return;
+            }
+
+            var isSanity = string.Equals(
+                resource.Label,
+                "이성",
+                StringComparison.Ordinal);
+            _conditionSection = isSanity
+                ? PawnProfileSection.PhobiasAndManias
+                : PawnProfileSection.OtherNotes;
+            _conditionTitle = isSanity
+                ? "이성 상태 관리"
+                : "체력 상태 관리";
+
+            EnsureConditionWidget();
+            RefreshConditionWidget();
+            _conditionWidget?.Show();
+        }
+
+        private void EnsureConditionWidget()
+        {
+            if (_conditionWidget != null || _infoBar == null)
+                return;
+
+            var canvas = _infoBar.GetComponentInParent<Canvas>();
+            var rootCanvas = canvas != null ? canvas.rootCanvas : null;
+            if (rootCanvas == null)
+            {
+                Debug.LogError(
+                    $"[{name}] 상태 관리 UI를 생성할 Root Canvas를 " +
+                    "찾지 못했습니다.",
+                    this);
+                return;
+            }
+
+            var text = _infoBar.GetComponentInChildren<Text>(true);
+            _conditionWidget = PawnConditionWidget.CreateRuntime(
+                rootCanvas,
+                text != null ? text.font : null);
+            _conditionWidget.AddRequested +=
+                HandleConditionAddRequested;
+            _conditionWidget.RemoveRequested +=
+                HandleConditionRemoveRequested;
+            _conditionWidget.CloseRequested +=
+                HandleConditionCloseRequested;
+        }
+
+        private void RefreshConditionWidget()
+        {
+            if (_conditionWidget == null ||
+                !_conditionWidget.IsVisible &&
+                _boundProfileState == null)
+            {
+                return;
+            }
+
+            IReadOnlyList<string> conditions =
+                _boundProfileState != null
+                    ? ExtractManagedConditions(
+                        _boundProfileState.GetField(_conditionSection))
+                    : Array.Empty<string>();
+            _conditionWidget.Bind(
+                _conditionTitle,
+                conditions,
+                _boundCharacterCanEdit);
+        }
+
+        private void HandleConditionAddRequested(string value)
+        {
+            if (!_boundCharacterCanEdit ||
+                _boundProfileState == null ||
+                string.IsNullOrWhiteSpace(value))
+            {
+                return;
+            }
+
+            var condition = "[상태] " + value.Trim();
+            var current =
+                _boundProfileState.GetField(_conditionSection) ??
+                string.Empty;
+            var existing = ExtractManagedConditions(current);
+            for (var index = 0; index < existing.Count; index++)
+            {
+                if (string.Equals(
+                        existing[index],
+                        condition,
+                        StringComparison.Ordinal))
+                {
+                    return;
+                }
+            }
+
+            var next = string.IsNullOrWhiteSpace(current)
+                ? condition
+                : current.TrimEnd() + "\n" + condition;
+            HandleProfileValueEditRequested(_conditionSection, next);
+            RefreshConditionWidget();
+        }
+
+        private void HandleConditionRemoveRequested(string condition)
+        {
+            if (!_boundCharacterCanEdit ||
+                _boundProfileState == null ||
+                string.IsNullOrWhiteSpace(condition))
+            {
+                return;
+            }
+
+            var current =
+                _boundProfileState.GetField(_conditionSection) ??
+                string.Empty;
+            var lines = NormalizeProfileLines(current);
+            var remaining = new List<string>(lines.Length);
+            var removed = false;
+            for (var index = 0; index < lines.Length; index++)
+            {
+                var line = lines[index];
+                if (!removed &&
+                    string.Equals(
+                        line.Trim(),
+                        condition.Trim(),
+                        StringComparison.Ordinal))
+                {
+                    removed = true;
+                    continue;
+                }
+
+                remaining.Add(line);
+            }
+
+            if (!removed)
+                return;
+
+            while (remaining.Count > 0 &&
+                   string.IsNullOrWhiteSpace(
+                       remaining[remaining.Count - 1]))
+            {
+                remaining.RemoveAt(remaining.Count - 1);
+            }
+
+            HandleProfileValueEditRequested(
+                _conditionSection,
+                string.Join("\n", remaining));
+            RefreshConditionWidget();
+        }
+
+        private void HandleConditionCloseRequested()
+        {
+            _conditionWidget?.Hide();
+        }
+
+        private static IReadOnlyList<string> ExtractManagedConditions(
+            string value)
+        {
+            var result = new List<string>();
+            var lines = NormalizeProfileLines(value);
+            for (var index = 0; index < lines.Length; index++)
+            {
+                var line = lines[index].Trim();
+                if (IsManagedConditionLine(line))
+                    result.Add(line);
+            }
+
+            return result;
+        }
+
+        private static bool IsManagedConditionLine(string line)
+        {
+            return !string.IsNullOrWhiteSpace(line) &&
+                   (line.StartsWith(
+                        "[상태]",
+                        StringComparison.Ordinal) ||
+                    line.StartsWith(
+                        "[자동 감지]",
+                        StringComparison.Ordinal));
+        }
+
+        private static string[] NormalizeProfileLines(string value)
+        {
+            return (value ?? string.Empty)
+                .Replace("\r\n", "\n")
+                .Replace('\r', '\n')
+                .Split(new[] { '\n' }, StringSplitOptions.None);
+        }
+
+        private void HandleResourceRollRequested(
+            PawnResourceRollRequest request)
+        {
+            if (!TryBeginRoll(out var pawn) ||
+                _boundStatState == null ||
+                string.IsNullOrWhiteSpace(
+                    request.Resource.CurrentStatId) ||
+                !TryGetDisplayedStatValue(
+                    _boundStatState,
+                    request.Resource.CurrentStatId,
+                    out var previousValue))
+            {
+                _isRollInProgress = false;
+                return;
+            }
+
+            var maximumValue = Math.Max(
+                0d,
+                request.Resource.Maximum);
+            PawnRollPresentationData presentation;
+            D100ModifiedRollResult sanityModifiedRoll = null;
+
+            if (request.Mode == PawnResourceRollMode.Sanity &&
+                UsesCallOfCthulhuRules)
+            {
+                var target = Mathf.Clamp(request.Target, 1, 100);
+                sanityModifiedRoll = _rollService.RollD100Modified(
+                    target,
+                    request.BonusPenaltyLevel);
+                var check = sanityModifiedRoll.SelectedResult;
+                var lossExpression = check.IsSuccess
+                    ? request.SuccessExpression
+                    : request.FailureExpression;
+                var lossRoll = _rollService.RollExpression(
+                    lossExpression);
+                var rolledLoss = Mathf.Max(0, lossRoll.Total);
+                var nextValue = Math.Max(0d, previousValue - rolledLoss);
+                var appliedLoss = Mathf.Max(
+                    0,
+                    Mathf.RoundToInt((float)(previousValue - nextValue)));
+                HandleStatValueEditRequested(
+                    request.Resource.CurrentStatId,
+                    nextValue);
+
+                var sanityState =
+                    CoCSanityRuntimeState.ResolveOrCreate(pawn);
+                var evaluation = sanityState.RecordLoss(
+                    Mathf.RoundToInt((float)previousValue),
+                    Mathf.RoundToInt((float)nextValue),
+                    appliedLoss,
+                    _settings.CocSingleSanityLossThreshold,
+                    _settings.CocPeriodSanityLossRatio);
+                TRPGSessionAuthority.Instance?.PublishSanityState(
+                    pawn,
+                    sanityState.CreateSnapshot());
+                var conditionLabel = BuildSanityConditionLabel(
+                    evaluation);
+                if (!string.IsNullOrWhiteSpace(conditionLabel))
+                {
+                    AppendAutomaticProfileCondition(
+                        pawn,
+                        PawnProfileSection.PhobiasAndManias,
+                        conditionLabel);
+                }
+
+                var detail =
+                    $"{GetCheckResultLabel(check.Grade)} | " +
+                    $"손실 {lossRoll.Expression} = {rolledLoss}" +
+                    (rolledLoss != appliedLoss
+                        ? $" (실제 적용 {appliedLoss})"
+                        : string.Empty) +
+                    $" | SAN {previousValue:0} → {nextValue:0}";
+                if (!string.IsNullOrWhiteSpace(conditionLabel))
+                {
+                    detail += " | " + conditionLabel.Replace(
+                        "\n",
+                        " | ");
+                }
+
+                presentation = new PawnRollPresentationData(
+                    "이성 판정",
+                    BuildD100Expression(sanityModifiedRoll) + $" / SAN {target}",
+                    check.Roll,
+                    1,
+                    100,
+                    GetCheckResultLabel(check.Grade),
+                    sanityModifiedRoll.GetCandidateLabel() + " | " + detail,
+                    GetCheckResultColor(check.Grade),
+                    1.55f,
+                    target);
+                PawnRollLogService.RecordRoll(
+                    PawnRollLogKind.Check,
+                    pawn,
+                    presentation.Title,
+                    presentation.Expression,
+                    presentation.FinalValue,
+                    presentation.ResultLabel,
+                    presentation.DetailLabel,
+                    request.Visibility);
+                TRPGSessionAuthority.PublishRoll(
+                    pawn,
+                    PawnRollLogKind.Check,
+                    presentation);
+            }
+            else
+            {
+                var result = _rollService.RollExpression(
+                    request.Expression);
+                var amount = Mathf.Max(0, result.Total);
+                var isHealing =
+                    request.Mode == PawnResourceRollMode.Healing;
+                var nextValue = isHealing
+                    ? Math.Min(maximumValue, previousValue + amount)
+                    : Math.Max(0d, previousValue - amount);
+                HandleStatValueEditRequested(
+                    request.Resource.CurrentStatId,
+                    nextValue);
+
+                var conditionLabels = new List<string>();
+                if (!isHealing &&
+                    UsesCallOfCthulhuRules)
+                {
+                    if (maximumValue > 0d &&
+                        amount >= Math.Ceiling(maximumValue * 0.5d))
+                    {
+                        conditionLabels.Add(
+                            $"[자동 감지] 중상 조건: 한 번에 {amount} 피해");
+                    }
+
+                    if (previousValue > 0d && nextValue <= 0d)
+                    {
+                        conditionLabels.Add(
+                            "[자동 감지] HP 0 도달: 빈사/의식 상태 확인 필요");
+                    }
+
+                    for (var conditionIndex = 0;
+                         conditionIndex < conditionLabels.Count;
+                         conditionIndex++)
+                    {
+                        AppendAutomaticProfileCondition(
+                            pawn,
+                            PawnProfileSection.OtherNotes,
+                            conditionLabels[conditionIndex]);
+                    }
+                }
+
+                var conditionLabel = string.Join(
+                    " | ",
+                    conditionLabels);
+
+                var title = isHealing ? "회복 굴림" : "피해 굴림";
+                var detail =
+                    $"{request.Resource.Label} " +
+                    $"{previousValue:0} → {nextValue:0}";
+                if (!string.IsNullOrWhiteSpace(conditionLabel))
+                {
+                    detail += $" | {conditionLabel}";
+                }
+
+                presentation = new PawnRollPresentationData(
+                    title,
+                    result.Expression,
+                    result.Total,
+                    result.MinimumTotal,
+                    result.MaximumTotal,
+                    $"합계 {result.Total}",
+                    detail,
+                    _effectColor,
+                    1.35f);
+                PawnRollLogService.RecordRoll(
+                    PawnRollLogKind.Effect,
+                    pawn,
+                    presentation.Title,
+                    presentation.Expression,
+                    presentation.FinalValue,
+                    presentation.ResultLabel,
+                    presentation.DetailLabel,
+                    request.Visibility);
+                TRPGSessionAuthority.PublishRoll(
+                    pawn,
+                    PawnRollLogKind.Effect,
+                    presentation);
+            }
+
+            if (sanityModifiedRoll != null)
+                _infoBar.PlayModifiedD100(sanityModifiedRoll, presentation);
+            else
+                _infoBar.PlayRoll(presentation);
+            RefreshStatUi();
+        }
+
+        private static string BuildD100Expression(
+            D100ModifiedRollResult result)
+        {
+            if (result == null || result.BonusPenaltyLevel == 0)
+                return "d100";
+            return result.BonusPenaltyLevel > 0
+                ? $"d100 + 보너스 {result.BonusPenaltyLevel}"
+                : $"d100 + 페널티 {-result.BonusPenaltyLevel}";
+        }
+
+        private static string BuildSanityConditionLabel(
+            CoCSanityEvaluation evaluation)
+        {
+            var conditions = new List<string>();
+            if (evaluation.TemporaryNew)
+            {
+                conditions.Add(
+                    "[자동 감지] 일시적 광기 조건");
+            }
+
+            if (evaluation.IndefiniteNew)
+            {
+                conditions.Add(
+                    $"[자동 감지] 장기적 광기 조건: 기간 누적 " +
+                    $"{evaluation.PeriodLoss} SAN 손실");
+            }
+
+            if (evaluation.PermanentNew)
+            {
+                conditions.Add(
+                    "[자동 감지] SAN 0: 영구적 광기 조건");
+            }
+
+            return string.Join("\n", conditions);
+        }
+
+        private void AppendAutomaticProfileCondition(
+            InteractivePawn pawn,
+            PawnProfileSection section,
+            string condition)
+        {
+            if (pawn == null || string.IsNullOrWhiteSpace(condition))
+            {
+                return;
+            }
+
+            var profile = PawnProfileState.ResolveOrCreate(
+                pawn.gameObject,
+                pawn.Definition);
+            if (profile == null)
+            {
+                return;
+            }
+
+            var current = profile.GetField(section) ?? string.Empty;
+            if (current.IndexOf(condition, StringComparison.Ordinal) >= 0)
+            {
+                return;
+            }
+
+            var next = string.IsNullOrWhiteSpace(current)
+                ? condition
+                : current.TrimEnd() + "\n" + condition;
+            var authority = TRPGSessionAuthority.Instance;
+            if (authority != null &&
+                authority.ShouldRouteClientProfileChange)
+            {
+                authority.RequestProfileFieldChange(
+                    pawn,
+                    section,
+                    next);
+                return;
+            }
+
+            if (!profile.TrySetField(section, next))
+            {
+                return;
+            }
+
+            if (authority != null &&
+                authority.IsLocalGameMaster &&
+                authority.IsGameplayReady)
+            {
+                authority.PublishHostProfileFieldChange(
+                    pawn,
+                    section,
+                    next);
+            }
         }
 
         private void HandleRollPresentationCompleted()

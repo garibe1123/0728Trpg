@@ -1,10 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
-using Trpg.Domain.Dice;
 using Trpg.Save;
 using Trpg.UI.Handouts;
 using Trpg.UI.Inventory;
+using Trpg.UI.Profile;
 using Trpg.UI.Skills;
 using Trpg.UI.Stats;
 using UnityEngine;
@@ -82,12 +82,13 @@ namespace Trpg.Pawns
             public int StatRestoredCount;
             public int SkillRestoredCount;
             public int InventoryRestoredCount;
-            public bool CheckHistoryRestored;
+            public int ProfileRestoredCount;
+            public int SanityStateRestoredCount;
             public bool HandoutsRestored;
+            public bool RollLogRestored;
         }
 
         private CampaignSaveService _saveService;
-        private CoCCheckHistoryService _checkHistory;
         private InputAction _escapeAction;
         private GameObject _ownedRuntimeMenuRoot;
         private GameObject _loadConfirmationRoot;
@@ -178,14 +179,10 @@ namespace Trpg.Pawns
 #endif
         }
 
-        public void Configure(
-            PawnManager pawnManager,
-            CoCCheckHistoryService checkHistory = null)
+        public void Configure(PawnManager pawnManager)
         {
             if (pawnManager != null)
                 _pawnManager = pawnManager;
-            if (checkHistory != null)
-                _checkHistory = checkHistory;
 
             TryInitialize();
         }
@@ -613,15 +610,17 @@ namespace Trpg.Pawns
 
             var handoutState = PublicHandoutState.ResolveOrCreate(
                 _pawnManager.gameObject);
+            var uiManager = FindFirst<PawnUIManager>();
             snapshot = new CampaignSnapshot
             {
                 AppVersion = Application.version,
-                CheckHistory = _checkHistory != null
-                    ? _checkHistory.CreateSnapshot()
-                    : new CoCCheckHistorySnapshot(),
+                RuleSet = uiManager != null
+                    ? (int)uiManager.RuleSet
+                    : (int)CampaignRuleSet.Generic,
                 PublicHandouts = handoutState != null
                     ? handoutState.CreateSnapshot()
-                    : new PublicHandoutSnapshot()
+                    : new PublicHandoutSnapshot(),
+                RollLog = PawnRollLogService.CreateSnapshot()
             };
 
             for (var index = 0; index < records.Count; index++)
@@ -660,6 +659,19 @@ namespace Trpg.Pawns
                 IsDead = pawn.IsDead
             };
 
+            if (movementManager != null &&
+                movementManager.TryGetMovementBudget(
+                    pawn,
+                    out var remainingMovementMeters,
+                    out var maximumMovementMeters))
+            {
+                stored.HasMovementBudget = true;
+                stored.RemainingMovementMeters =
+                    Mathf.Max(0f, remainingMovementMeters);
+                stored.MaximumMovementMeters =
+                    Mathf.Max(0f, maximumMovementMeters);
+            }
+
             if (pawn.HasStats)
             {
                 var statState = PlayerStatState.ResolveOrCreate(
@@ -681,7 +693,19 @@ namespace Trpg.Pawns
                 stored.Inventory = inventoryState != null
                     ? inventoryState.CreateSnapshot()
                     : null;
+
+                var profileState = PawnProfileState.ResolveOrCreate(
+                    pawn.gameObject,
+                    pawn.Definition);
+                stored.Profile = profileState != null
+                    ? profileState.CreateSnapshot()
+                    : null;
             }
+
+            var sanityState = pawn.GetComponent<CoCSanityRuntimeState>();
+            stored.CocSanity = sanityState != null
+                ? sanityState.CreateSnapshot()
+                : null;
 
             return stored;
         }
@@ -918,17 +942,13 @@ namespace Trpg.Pawns
             if (!plan.HasMeaningfulDifference && current != null)
             {
                 plan.HasMeaningfulDifference =
-                    !AreJsonSnapshotsEquivalent(
-                        current.CheckHistory,
-                        snapshot.CheckHistory);
-            }
-
-            if (!plan.HasMeaningfulDifference && current != null)
-            {
-                plan.HasMeaningfulDifference =
+                    current.RuleSet != snapshot.RuleSet ||
                     !AreJsonSnapshotsEquivalent(
                         current.PublicHandouts,
-                        snapshot.PublicHandouts);
+                        snapshot.PublicHandouts) ||
+                    !AreJsonSnapshotsEquivalent(
+                        current.RollLog,
+                        snapshot.RollLog);
             }
 
             return true;
@@ -946,6 +966,11 @@ namespace Trpg.Pawns
             result.Issues.AddRange(plan.Issues);
 
             _pawnManager.ClearSelection();
+            TryRestoreRuleSet(
+                plan.Snapshot.RuleSet,
+                rollback != null ? rollback.RuleSet : plan.Snapshot.RuleSet,
+                result);
+
             for (var index = 0; index < plan.Bindings.Count; index++)
             {
                 ApplyPawnBinding(plan.Bindings[index], result);
@@ -954,43 +979,78 @@ namespace Trpg.Pawns
             result.SkippedPawnCount +=
                 Mathf.Max(0, plan.StoredPawnCount - plan.Bindings.Count);
 
-            if (_checkHistory != null)
-            {
-                if (_checkHistory.TryRestore(
-                        plan.Snapshot.CheckHistory,
-                        out var historyError))
-                {
-                    result.CheckHistoryRestored = true;
-                }
-                else
-                {
-                    AddLoadIssue(
-                        result.Issues,
-                        "LOAD-601",
-                        string.Empty,
-                        "판정 기록을 복원하지 못해 기존 기록을 " +
-                        "유지합니다. " + historyError);
-
-                    if (rollback != null)
-                    {
-                        _checkHistory.TryRestore(
-                            rollback.CheckHistory,
-                            out _);
-                    }
-                }
-            }
 
             TryRestorePublicHandouts(
                 plan.Snapshot.PublicHandouts,
                 rollback != null ? rollback.PublicHandouts : null,
+                plan.Snapshot.SchemaVersion < 3,
+                result);
+            TryRestoreRollLog(
+                plan.Snapshot.RollLog,
+                rollback != null ? rollback.RollLog : null,
                 result);
 
             return result;
         }
 
+        private void TryRestoreRuleSet(
+            int storedRuleSet,
+            int rollbackRuleSet,
+            LoadResult result)
+        {
+            var uiManager = FindFirst<PawnUIManager>();
+            if (uiManager == null)
+            {
+                AddLoadIssue(
+                    result.Issues,
+                    "LOAD-751",
+                    string.Empty,
+                    "PawnUIManager를 찾지 못해 캠페인 룰셋은 " +
+                    "현재 설정을 유지합니다.");
+                return;
+            }
+
+            if (!Enum.IsDefined(
+                    typeof(CampaignRuleSet),
+                    storedRuleSet))
+            {
+                AddLoadIssue(
+                    result.Issues,
+                    "LOAD-752",
+                    string.Empty,
+                    "저장된 캠페인 룰셋 값이 유효하지 않아 " +
+                    "현재 설정을 유지합니다. Value=" + storedRuleSet);
+                return;
+            }
+
+            try
+            {
+                uiManager.ApplyCampaignRuleSet(
+                    (CampaignRuleSet)storedRuleSet);
+            }
+            catch (Exception exception)
+            {
+                if (Enum.IsDefined(
+                        typeof(CampaignRuleSet),
+                        rollbackRuleSet))
+                {
+                    uiManager.ApplyCampaignRuleSet(
+                        (CampaignRuleSet)rollbackRuleSet);
+                }
+
+                AddLoadIssue(
+                    result.Issues,
+                    "LOAD-753",
+                    string.Empty,
+                    "캠페인 룰셋 복원 중 예외가 발생했습니다. " +
+                    exception.Message);
+            }
+        }
+
         private void TryRestorePublicHandouts(
             PublicHandoutSnapshot target,
             PublicHandoutSnapshot rollback,
+            bool migrateLegacyGlobalVisibility,
             LoadResult result)
         {
             if (target == null)
@@ -1015,6 +1075,21 @@ namespace Trpg.Pawns
                     out var applyError))
             {
                 result.HandoutsRestored = true;
+                if (migrateLegacyGlobalVisibility &&
+                    (target.PawnRecords == null ||
+                     target.PawnRecords.Count == 0))
+                {
+                    MigrateLegacyGlobalHandouts(state, result);
+                }
+
+                var authority = TRPGSessionAuthority.Instance;
+                if (authority != null &&
+                    authority.IsOnline &&
+                    authority.IsLocalGameMaster)
+                {
+                    authority.PublishHostHandoutSnapshot();
+                }
+
                 for (var index = 0;
                      index < missingDefinitionIds.Count;
                      index++)
@@ -1051,6 +1126,110 @@ namespace Trpg.Pawns
                     string.Empty,
                     "공용 핸드아웃 롤백에도 실패했습니다. " +
                     rollbackError);
+            }
+        }
+
+        private void MigrateLegacyGlobalHandouts(
+            PublicHandoutState state,
+            LoadResult result)
+        {
+            if (state == null || _pawnManager == null)
+                return;
+
+            var migratedCount = 0;
+            var players = _pawnManager.PlayerPawns;
+            var handouts = state.Handouts;
+            for (var pawnIndex = 0;
+                 pawnIndex < players.Count;
+                 pawnIndex++)
+            {
+                var pawn = players[pawnIndex];
+                if (pawn == null)
+                    continue;
+
+                for (var handoutIndex = 0;
+                     handoutIndex < handouts.Count;
+                     handoutIndex++)
+                {
+                    if (state.TryGrantExistingToPawn(
+                            pawn,
+                            handouts[handoutIndex].DefinitionId,
+                            out _))
+                    {
+                        migratedCount++;
+                    }
+                }
+            }
+
+            if (migratedCount > 0)
+            {
+                AddLoadIssue(
+                    result.Issues,
+                    "LOAD-805",
+                    string.Empty,
+                    "구버전 전체 공개 핸드아웃을 Player Pawn별 " +
+                    $"열람 가능 기록 {migratedCount}건으로 이관했습니다.");
+            }
+        }
+
+        private void TryRestoreRollLog(
+            PawnRollLogSnapshot target,
+            PawnRollLogSnapshot rollback,
+            LoadResult result)
+        {
+            if (target == null)
+                return;
+
+            InteractivePawn ResolveByDefinitionId(string definitionId)
+            {
+                if (string.IsNullOrWhiteSpace(definitionId))
+                    return null;
+
+                var pawns = FindAll<InteractivePawn>();
+                for (var index = 0; index < pawns.Length; index++)
+                {
+                    var pawn = pawns[index];
+                    if (pawn != null &&
+                        pawn.Definition != null &&
+                        string.Equals(
+                            pawn.Definition.Id,
+                            definitionId,
+                            StringComparison.Ordinal))
+                    {
+                        return pawn;
+                    }
+                }
+
+                return null;
+            }
+
+            if (PawnRollLogService.TryApplySnapshot(
+                    target,
+                    ResolveByDefinitionId,
+                    out var error))
+            {
+                result.RollLogRestored = true;
+                var authority = TRPGSessionAuthority.Instance;
+                if (authority != null &&
+                    authority.IsOnline &&
+                    authority.IsLocalGameMaster)
+                {
+                    authority.PublishHostRollLogSnapshot();
+                }
+                return;
+            }
+
+            AddLoadIssue(
+                result.Issues,
+                "LOAD-852",
+                string.Empty,
+                "굴림 로그를 복원하지 못했습니다. " + error);
+            if (rollback != null)
+            {
+                PawnRollLogService.TryApplySnapshot(
+                    rollback,
+                    ResolveByDefinitionId,
+                    out _);
             }
         }
 
@@ -1098,6 +1277,10 @@ namespace Trpg.Pawns
             if (supportsCharacterSheet && stored.Skills != null)
                 requestedAreaCount++;
             if (supportsCharacterSheet && stored.Inventory != null)
+                requestedAreaCount++;
+            if (supportsCharacterSheet && stored.Profile != null)
+                requestedAreaCount++;
+            if (stored.CocSanity != null)
                 requestedAreaCount++;
 
             var restoredAreaCount = 0;
@@ -1153,6 +1336,40 @@ namespace Trpg.Pawns
                         result.Issues))
                 {
                     result.InventoryRestoredCount++;
+                    restoredAreaCount++;
+                }
+                else
+                {
+                    pawnHasIssue = true;
+                }
+            }
+
+            if (supportsCharacterSheet && stored.Profile != null)
+            {
+                if (TryRestoreProfile(
+                        pawn,
+                        stored.Profile,
+                        before != null ? before.Profile : null,
+                        result.Issues))
+                {
+                    result.ProfileRestoredCount++;
+                    restoredAreaCount++;
+                }
+                else
+                {
+                    pawnHasIssue = true;
+                }
+            }
+
+            if (stored.CocSanity != null)
+            {
+                if (TryRestoreSanityState(
+                        pawn,
+                        stored.CocSanity,
+                        before != null ? before.CocSanity : null,
+                        result.Issues))
+                {
+                    result.SanityStateRestoredCount++;
                     restoredAreaCount++;
                 }
                 else
@@ -1239,7 +1456,34 @@ namespace Trpg.Pawns
             }
 
             if (state.TryApplySnapshot(target, out var applyError))
+            {
+                var authority = TRPGSessionAuthority.Instance;
+                if (authority != null &&
+                    authority.IsOnline &&
+                    authority.IsLocalGameMaster &&
+                    target.RuntimeValues != null)
+                {
+                    for (var index = 0;
+                         index < target.RuntimeValues.Count;
+                         index++)
+                    {
+                        var value = target.RuntimeValues[index];
+                        if (value == null ||
+                            string.IsNullOrWhiteSpace(value.StatId))
+                        {
+                            continue;
+                        }
+
+                        authority.PublishHostStatChange(
+                            pawn,
+                            value.StatId,
+                            value.Value,
+                            value.Value);
+                    }
+                }
+
                 return true;
+            }
 
             AddLoadIssue(
                 issues,
@@ -1281,7 +1525,17 @@ namespace Trpg.Pawns
             }
 
             if (state.TryApplySnapshot(target, out var applyError))
+            {
+                var authority = TRPGSessionAuthority.Instance;
+                if (authority != null &&
+                    authority.IsOnline &&
+                    authority.IsLocalGameMaster)
+                {
+                    authority.PublishHostSkillSnapshot(pawn);
+                }
+
                 return true;
+            }
 
             AddLoadIssue(
                 issues,
@@ -1323,7 +1577,20 @@ namespace Trpg.Pawns
             }
 
             if (state.TryApplySnapshot(target, out var applyError))
+            {
+                var authority = TRPGSessionAuthority.Instance;
+                if (authority != null &&
+                    authority.IsOnline &&
+                    authority.IsLocalGameMaster)
+                {
+                    authority.PublishHostInventorySnapshot(
+                        pawn,
+                        "세이브 복원",
+                        "저장된 인벤토리 상태를 복원했습니다.");
+                }
+
                 return true;
+            }
 
             AddLoadIssue(
                 issues,
@@ -1343,6 +1610,99 @@ namespace Trpg.Pawns
                     "실패했습니다. " + restoreError);
             }
 
+            return false;
+        }
+
+        private static bool TryRestoreProfile(
+            InteractivePawn pawn,
+            PawnProfileRuntimeSnapshot target,
+            PawnProfileRuntimeSnapshot rollback,
+            ICollection<LoadIssue> issues)
+        {
+            var state = PawnProfileState.ResolveOrCreate(
+                pawn.gameObject,
+                pawn.Definition);
+            if (state == null)
+            {
+                AddLoadIssue(
+                    issues,
+                    "LOAD-601",
+                    pawn.name,
+                    "PawnProfileState를 준비하지 못해 프로필을 " +
+                    "건너뜁니다.");
+                return false;
+            }
+
+            if (state.TryApplySnapshot(target, out var applyError))
+            {
+                var authority = TRPGSessionAuthority.Instance;
+                if (authority != null &&
+                    authority.IsOnline &&
+                    authority.IsLocalGameMaster)
+                {
+                    foreach (PawnProfileSection section in Enum.GetValues(
+                                 typeof(PawnProfileSection)))
+                    {
+                        authority.PublishHostProfileFieldChange(
+                            pawn,
+                            section,
+                            state.GetField(section));
+                    }
+                }
+
+                return true;
+            }
+
+            AddLoadIssue(
+                issues,
+                "LOAD-602",
+                pawn.name,
+                "프로필 Snapshot 적용에 실패해 기존 프로필을 " +
+                "유지합니다. " + applyError);
+
+            if (rollback != null &&
+                !state.TryApplySnapshot(rollback, out var restoreError))
+            {
+                AddLoadIssue(
+                    issues,
+                    "LOAD-609",
+                    pawn.name,
+                    "프로필 적용 실패 후 기존 프로필 복원에도 " +
+                    "실패했습니다. " + restoreError);
+            }
+
+            return false;
+        }
+
+        private static bool TryRestoreSanityState(
+            InteractivePawn pawn,
+            CoCSanityRuntimeSnapshot target,
+            CoCSanityRuntimeSnapshot rollback,
+            ICollection<LoadIssue> issues)
+        {
+            var state = CoCSanityRuntimeState.ResolveOrCreate(pawn);
+            if (state != null && state.TryApplySnapshot(target))
+            {
+                var authority = TRPGSessionAuthority.Instance;
+                if (authority != null &&
+                    authority.IsOnline &&
+                    authority.IsLocalGameMaster)
+                {
+                    authority.PublishSanityState(
+                        pawn,
+                        state.CreateSnapshot());
+                }
+
+                return true;
+            }
+
+            AddLoadIssue(
+                issues,
+                "LOAD-651",
+                pawn.name,
+                "CoC SAN 누적 상태를 복원하지 못했습니다.");
+            if (state != null && rollback != null)
+                state.TryApplySnapshot(rollback);
             return false;
         }
 
@@ -1376,12 +1736,20 @@ namespace Trpg.Pawns
                 var movementManager = _pawnManager.MovementManager;
                 if (movementManager != null)
                 {
-                    movementManager.RefreshMovementBudgetFromStats(
-                        pawn,
-                        false);
-                    if (!movementManager.RestorePawnPosition(
-                            pawn,
-                            restoredPosition))
+                    var movementRestored = target.HasMovementBudget &&
+                        IsFinite(target.RemainingMovementMeters) &&
+                        IsFinite(target.MaximumMovementMeters)
+                            ? movementManager.ApplyReplicatedSnapshot(
+                                pawn,
+                                restoredPosition,
+                                target.RemainingMovementMeters,
+                                target.MaximumMovementMeters)
+                            : RestoreLegacyMovementState(
+                                movementManager,
+                                pawn,
+                                restoredPosition);
+
+                    if (!movementRestored)
                     {
                         pawn.TeleportTo(restoredPosition);
                         hadWarning = true;
@@ -1389,8 +1757,8 @@ namespace Trpg.Pawns
                             issues,
                             "LOAD-503",
                             pawn.name,
-                            "MovementManager 내부 위치 동기화에 실패해 " +
-                            "Transform 위치만 복원했습니다.");
+                            "MovementManager 내부 위치/이동거리 동기화에 " +
+                            "실패해 Transform 위치만 복원했습니다.");
                     }
                 }
                 else
@@ -1412,6 +1780,15 @@ namespace Trpg.Pawns
                     0f,
                     0f,
                     target.RotationZ);
+
+                var authority = TRPGSessionAuthority.Instance;
+                if (authority != null &&
+                    authority.IsOnline &&
+                    authority.IsLocalGameMaster)
+                {
+                    authority.PublishHostMovementSnapshot(pawn);
+                }
+
                 return true;
             }
             catch (Exception exception)
@@ -1429,6 +1806,22 @@ namespace Trpg.Pawns
             }
         }
 
+        private static bool RestoreLegacyMovementState(
+            PawnMovementManager movementManager,
+            InteractivePawn pawn,
+            Vector2 position)
+        {
+            if (movementManager == null || pawn == null)
+                return false;
+
+            movementManager.RefreshMovementBudgetFromStats(
+                pawn,
+                false);
+            return movementManager.RestorePawnPosition(
+                pawn,
+                position);
+        }
+
         private void RestorePositionBestEffort(
             InteractivePawn pawn,
             PawnSnapshot snapshot)
@@ -1443,9 +1836,29 @@ namespace Trpg.Pawns
                     snapshot.PositionY);
                 var movementManager = _pawnManager.MovementManager;
                 if (movementManager != null)
-                    movementManager.RestorePawnPosition(pawn, position2D);
+                {
+                    if (snapshot.HasMovementBudget &&
+                        IsFinite(snapshot.RemainingMovementMeters) &&
+                        IsFinite(snapshot.MaximumMovementMeters))
+                    {
+                        movementManager.ApplyReplicatedSnapshot(
+                            pawn,
+                            position2D,
+                            snapshot.RemainingMovementMeters,
+                            snapshot.MaximumMovementMeters);
+                    }
+                    else
+                    {
+                        RestoreLegacyMovementState(
+                            movementManager,
+                            pawn,
+                            position2D);
+                    }
+                }
                 else
+                {
                     pawn.TeleportTo(position2D);
+                }
 
                 var position = pawn.transform.position;
                 position.z = snapshot.PositionZ;
@@ -1932,6 +2345,15 @@ namespace Trpg.Pawns
                    Mathf.Abs(Mathf.DeltaAngle(
                        current.RotationZ,
                        target.RotationZ)) <= 0.01f &&
+                   current.HasMovementBudget ==
+                       target.HasMovementBudget &&
+                   (!current.HasMovementBudget ||
+                    (Mathf.Abs(
+                         current.RemainingMovementMeters -
+                         target.RemainingMovementMeters) <= 0.001f &&
+                     Mathf.Abs(
+                         current.MaximumMovementMeters -
+                         target.MaximumMovementMeters) <= 0.001f)) &&
                    current.IsHidden == target.IsHidden &&
                    current.IsDead == target.IsDead &&
                    AreJsonSnapshotsEquivalent(
@@ -1942,7 +2364,13 @@ namespace Trpg.Pawns
                        target.Skills) &&
                    AreJsonSnapshotsEquivalent(
                        current.Inventory,
-                       target.Inventory);
+                       target.Inventory) &&
+                   AreJsonSnapshotsEquivalent(
+                       current.Profile,
+                       target.Profile) &&
+                   AreJsonSnapshotsEquivalent(
+                       current.CocSanity,
+                       target.CocSanity);
         }
 
         private static bool AreJsonSnapshotsEquivalent(

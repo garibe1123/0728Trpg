@@ -39,6 +39,47 @@ namespace Trpg.Pawns
             "선택된 Interactive Pawn에 적용할 Material")]
         private Material _activeMaterial;
 
+        [Header("Modular Pawn Sprite")]
+        [SerializeField, Tooltip(
+            "모든 Player/NPC Pawn이 ID로 참조하는 중앙 파츠 라이브러리")]
+        private PawnSpriteLibrary _pawnSpriteLibrary;
+
+        [SerializeField, Tooltip(
+            "Unity Animator를 사용하지 않는 기본 5키 정수 Pixel Idle Motion")]
+        [FormerlySerializedAs("_defaultPawnOffsetAnimation")]
+        private PawnIdleMotion _defaultPawnIdleMotion;
+
+        [FormerlySerializedAs("_pawnSpriteRigPoolSize")]
+        [SerializeField, Range(0, 128), Tooltip(
+            "시작 시 미리 생성할 모듈형 Pawn Rig 수. 최대치가 아니며 부족하면 자동 확장됩니다.")]
+        private int _pawnSpriteRigInitialCapacity = 16;
+
+        [SerializeField, Range(1, 256), Tooltip(
+            "모듈형 Pawn의 기준 Pixels Per Unit. 기본값은 16입니다.")]
+        private int _pawnSpritePixelsPerUnit = 16;
+
+        [SerializeField, Range(0.25f, 32f), Tooltip(
+            "월드 Y 1유닛당 생성할 정렬 밴드 수. 아래쪽 Pawn일수록 높은 sortingOrder를 받습니다.")]
+        private float _pawnSpriteSortingBandsPerWorldUnit = 4f;
+
+        [SerializeField, Range(1, 16), Tooltip(
+            "빠른 카메라 이동 시 프레임당 새로 할당할 Rig 수")]
+        private int _pawnSpriteRigAcquirePerFrame = 4;
+
+        [SerializeField, Range(1, 16), Tooltip(
+            "카메라 컬링 판정을 수행할 프레임 간격")]
+        private int _pawnSpriteCullingInterval = 4;
+
+        [SerializeField, Min(0.01f), Tooltip(
+            "카메라 컬링 마진 계산에 사용하는 한 셀의 월드 크기")]
+        private float _pawnSpriteCellWorldSize = 1.5f;
+
+        [SerializeField, Min(0f)]
+        private float _pawnSpriteEnterMarginCells = 1f;
+
+        [SerializeField, Min(0f)]
+        private float _pawnSpriteExitMarginCells = 2f;
+
         [SerializeField]
         private PawnMovementManager _movementManager;
 
@@ -130,6 +171,7 @@ namespace Trpg.Pawns
         private Vector3 _cameraFollowVelocity;
         private Sequence _cameraFocusTween;
         private TRPGNetworkGameManager _networkGameManager;
+        private PawnSpriteRuntimeController _pawnSpriteRuntime;
 
         public event Action<InteractivePawn> InteractiveSelectionChanged;
         public event Action<InteractivePawn> InteractionRequested;
@@ -141,6 +183,13 @@ namespace Trpg.Pawns
         public bool IsMovementModeActive => _isMovementModeActive;
         public PawnMovementManager MovementManager => _movementManager;
         public Camera BoardCamera => _boardCamera;
+        public PawnSpriteLibrary PawnSpriteLibrary => _pawnSpriteLibrary;
+        public PawnIdleMotion DefaultPawnIdleMotion =>
+            _defaultPawnIdleMotion;
+        public int PawnSpritePixelsPerUnit =>
+            PixelSnap.NormalizePixelsPerUnit(_pawnSpritePixelsPerUnit);
+        public float PawnSpriteSortingBandsPerWorldUnit =>
+            Mathf.Max(0.01f, _pawnSpriteSortingBandsPerWorldUnit);
         public IReadOnlyList<InteractivePawn> PlayerPawns =>
             _playerPawns;
         public IReadOnlyList<InteractivePawn> NpcPawns => _npcPawns;
@@ -269,6 +318,9 @@ namespace Trpg.Pawns
                 }
             }
 
+            DisposePawnSpriteRuntime();
+            EnsurePawnSpriteRuntime();
+            _pawnSpriteRuntime?.BindPawns(_interactivePawns);
             ApplyDefaultPresentations();
             _movementManager.Bind(_interactivePawns);
             BindCameraFollowEvents();
@@ -301,6 +353,7 @@ namespace Trpg.Pawns
 
             IndexPawns(true);
             InitializeCurrentTurnGroup();
+            EnsurePawnSpriteRuntime();
             ValidateSelectionMaterials();
             EnsureTurnButton();
 
@@ -335,6 +388,8 @@ namespace Trpg.Pawns
                 }
             }
 
+            EnsurePawnSpriteRuntime();
+            _pawnSpriteRuntime?.BindPawns(_interactivePawns);
             ApplyDefaultPresentations();
             ApplySelectionPresentation(
                 _selectedInteractive,
@@ -400,10 +455,13 @@ namespace Trpg.Pawns
                     _pawns[index].Unbind();
                 }
             }
+
+            DisposePawnSpriteRuntime();
         }
 
         private void OnDestroy()
         {
+            DisposePawnSpriteRuntime();
             KillCameraFocusTween();
             _selectAction?.Dispose();
             _moveAction?.Dispose();
@@ -433,16 +491,17 @@ namespace Trpg.Pawns
 
         private void LateUpdate()
         {
-            if (!_followActivePawnDuringMovement ||
-                _cameraFollowPawn == null ||
-                _boardCamera == null)
+            if (_followActivePawnDuringMovement &&
+                _cameraFollowPawn != null &&
+                _boardCamera != null)
             {
-                return;
+                MoveCameraTo(
+                    _cameraFollowPawn.PresentationWorldPosition,
+                    false);
             }
 
-            MoveCameraTo(
-                _cameraFollowPawn.PresentationWorldPosition,
-                false);
+            _pawnSpriteRuntime?.Update(Time.time);
+            UpdateSimplePawnSorting();
         }
 
         private void HandleSelectPerformed(
@@ -990,7 +1049,9 @@ namespace Trpg.Pawns
                 pawn.GetComponentsInChildren<SpriteRenderer>(true);
             _interactiveRenderers[pawn] = renderers;
 
-            if (logValidation && renderers.Length == 0)
+            if (logValidation &&
+                renderers.Length == 0 &&
+                !pawn.UsesModularSpriteMotion)
             {
                 Debug.LogWarning(
                     $"[{pawn.name}] 선택 Material을 적용할 " +
@@ -1023,14 +1084,28 @@ namespace Trpg.Pawns
             }
 
             pawn.SetSelected(selected);
+            if (pawn.UsesModularSpriteMotion)
+            {
+                RegisterModularPawn(pawn);
+                _pawnSpriteRuntime?.SetSelection(
+                    pawn,
+                    selected,
+                    selected ? material : null,
+                    pawn.Definition != null
+                        ? pawn.Definition.SelectedScale
+                        : 1f);
+                return;
+            }
+
             if (material == null)
             {
                 return;
             }
 
-            if (!_interactiveRenderers.TryGetValue(
-                    pawn,
-                    out var renderers) ||
+            _interactiveRenderers.TryGetValue(
+                pawn,
+                out var renderers);
+            if (pawn.UsesSimpleSpriteVisual ||
                 renderers == null ||
                 renderers.Length == 0)
             {
@@ -1047,6 +1122,121 @@ namespace Trpg.Pawns
                 }
             }
         }
+
+        private void UpdateSimplePawnSorting()
+        {
+            for (var index = 0; index < _interactivePawns.Count; index++)
+            {
+                var pawn = _interactivePawns[index];
+                if (pawn == null || !pawn.UsesSimpleSpriteVisual)
+                    continue;
+
+                pawn.UpdateSimpleVisualSorting(
+                    PawnSpriteSortingBandsPerWorldUnit);
+            }
+        }
+
+        private void EnsurePawnSpriteRuntime()
+        {
+            if (_pawnSpriteRuntime != null ||
+                _pawnSpriteLibrary == null)
+            {
+                return;
+            }
+
+            _pawnSpriteRuntime = new PawnSpriteRuntimeController(
+                transform,
+                _pawnSpriteLibrary,
+                _defaultPawnIdleMotion,
+                _boardCamera,
+                _pawnSpriteRigInitialCapacity,
+                _pawnSpriteRigAcquirePerFrame,
+                _pawnSpriteCullingInterval,
+                _pawnSpriteCellWorldSize,
+                _pawnSpriteEnterMarginCells,
+                _pawnSpriteExitMarginCells,
+                PawnSpritePixelsPerUnit,
+                PawnSpriteSortingBandsPerWorldUnit);
+        }
+
+        private void DisposePawnSpriteRuntime()
+        {
+            _pawnSpriteRuntime?.Dispose();
+            _pawnSpriteRuntime = null;
+        }
+
+        internal void ReleasePawnSpriteRig(PawnSpriteAnimator animator)
+        {
+            _pawnSpriteRuntime?.ReleaseAnimator(animator);
+        }
+
+        public void RegisterModularPawn(InteractivePawn pawn)
+        {
+            if (pawn == null ||
+                !pawn.UsesModularSpriteMotion ||
+                _pawnSpriteLibrary == null)
+            {
+                return;
+            }
+
+            EnsurePawnSpriteRuntime();
+
+            _pawnSpriteRuntime?.RegisterPawn(pawn);
+
+            CacheInteractiveRenderers(
+                pawn,
+                false);
+        }
+
+
+
+        public void RefreshModularPawnAppearance(InteractivePawn pawn)
+        {
+            if (pawn == null)
+                return;
+
+            EnsurePawnSpriteRuntime();
+            _pawnSpriteRuntime?.RefreshAppearance(pawn);
+        }
+
+#if UNITY_EDITOR
+        [ContextMenu("Refresh Modular Pawn Previews")]
+        public void RefreshEditorPawnSpritePreviews()
+        {
+            var found = FindObjectsByType<InteractivePawn>(
+                FindObjectsInactive.Include,
+                FindObjectsSortMode.None);
+            for (var index = 0; index < found.Length; index++)
+            {
+                var pawn = found[index];
+                if (pawn == null || pawn.Definition == null)
+                    continue;
+
+                pawn.RefreshVisualDefinition(this);
+
+                var animator = pawn.GetComponent<PawnSpriteAnimator>();
+                if (pawn.UsesModularSpriteMotion && animator == null)
+                {
+                    animator = UnityEditor.Undo.AddComponent<
+                        PawnSpriteAnimator>(pawn.gameObject);
+                }
+
+                if (pawn.UsesModularSpriteMotion)
+                {
+                    animator?.RefreshEditorPreview(
+                        _pawnSpriteLibrary,
+                        _defaultPawnIdleMotion,
+                        PawnSpritePixelsPerUnit,
+                        PawnSpriteSortingBandsPerWorldUnit);
+                }
+                else
+                {
+                    animator?.DestroyEditorPreview();
+                    animator?.SetLegacyRenderersHidden(false);
+                }
+            }
+        }
+#endif
 
         private void InitializeCurrentTurnGroup()
         {

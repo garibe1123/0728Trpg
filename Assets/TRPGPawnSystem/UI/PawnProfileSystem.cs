@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Trpg.Pawns;
 using UnityEngine;
 using UnityEngine.EventSystems;
@@ -1371,6 +1372,544 @@ namespace Trpg.UI.Profile
             Stretch(text.rectTransform, 5f, 5f, 2f, 2f);
             text.text = label;
             text.raycastTarget = false;
+            return button;
+        }
+
+        private static void SetAnchors(
+            RectTransform rect,
+            Vector2 anchorMin,
+            Vector2 anchorMax,
+            Vector2 pivot,
+            Vector2 anchoredPosition,
+            Vector2 sizeDelta)
+        {
+            rect.anchorMin = anchorMin;
+            rect.anchorMax = anchorMax;
+            rect.pivot = pivot;
+            rect.anchoredPosition = anchoredPosition;
+            rect.sizeDelta = sizeDelta;
+        }
+
+        private static void Stretch(
+            RectTransform rect,
+            float left,
+            float right,
+            float bottom,
+            float top)
+        {
+            rect.anchorMin = Vector2.zero;
+            rect.anchorMax = Vector2.one;
+            rect.offsetMin = new Vector2(left, bottom);
+            rect.offsetMax = new Vector2(-right, -top);
+        }
+    }
+
+    public sealed class PawnConditionWidget : MonoBehaviour
+    {
+        private readonly List<string> _conditions =
+            new List<string>();
+
+        private Canvas _rootCanvas;
+        private Font _font;
+        private RectTransform _rootRect;
+        private RectTransform _panelRect;
+        private RectTransform _contentRect;
+        private CanvasGroup _canvasGroup;
+        private Text _titleText;
+        private Text _emptyText;
+        private InputField _input;
+        private Button _addButton;
+        private GameObject _inputRow;
+        private bool _isVisible;
+        private bool _canEdit;
+
+        public event Action<string> AddRequested;
+        public event Action<string> RemoveRequested;
+        public event Action CloseRequested;
+
+        public bool IsVisible => _isVisible;
+
+        public static PawnConditionWidget CreateRuntime(
+            Canvas rootCanvas,
+            Font font)
+        {
+            if (rootCanvas == null)
+                throw new ArgumentNullException(nameof(rootCanvas));
+
+            var root = new GameObject(
+                "PawnConditionWidget",
+                typeof(RectTransform),
+                typeof(CanvasGroup));
+            var widget = root.AddComponent<PawnConditionWidget>();
+            widget.Build(rootCanvas, font);
+            return widget;
+        }
+
+        public void Bind(
+            string title,
+            IReadOnlyList<string> conditions,
+            bool canEdit)
+        {
+            _canEdit = canEdit;
+            if (_titleText != null)
+            {
+                _titleText.text = string.IsNullOrWhiteSpace(title)
+                    ? "상태 관리"
+                    : title.Trim();
+            }
+
+            _conditions.Clear();
+            if (conditions != null)
+            {
+                for (var index = 0; index < conditions.Count; index++)
+                {
+                    var value = conditions[index];
+                    if (!string.IsNullOrWhiteSpace(value))
+                        _conditions.Add(value.Trim());
+                }
+            }
+
+            if (_inputRow != null)
+                _inputRow.SetActive(_canEdit);
+            if (_addButton != null)
+                _addButton.interactable = _canEdit;
+            if (_input != null)
+                _input.interactable = _canEdit;
+            RebuildRows();
+        }
+
+        public void Show()
+        {
+            _isVisible = true;
+            gameObject.SetActive(true);
+            _rootRect.SetAsLastSibling();
+            _canvasGroup.alpha = 1f;
+            _canvasGroup.interactable = true;
+            _canvasGroup.blocksRaycasts = true;
+            if (_canEdit && _input != null)
+            {
+                _input.Select();
+                _input.ActivateInputField();
+            }
+        }
+
+        public void Hide()
+        {
+            _isVisible = false;
+            if (_input != null)
+                _input.SetTextWithoutNotify(string.Empty);
+            _canvasGroup.alpha = 0f;
+            _canvasGroup.interactable = false;
+            _canvasGroup.blocksRaycasts = false;
+            gameObject.SetActive(false);
+        }
+
+        private void Build(Canvas rootCanvas, Font font)
+        {
+            _rootCanvas = rootCanvas.rootCanvas != null
+                ? rootCanvas.rootCanvas
+                : rootCanvas;
+            _font = font != null
+                ? font
+                : Resources.GetBuiltinResource<Font>(
+                    "LegacyRuntime.ttf");
+
+            _rootRect = GetComponent<RectTransform>();
+            _rootRect.SetParent(_rootCanvas.transform, false);
+            _rootRect.anchorMin = Vector2.zero;
+            _rootRect.anchorMax = Vector2.one;
+            _rootRect.offsetMin = Vector2.zero;
+            _rootRect.offsetMax = Vector2.zero;
+            _canvasGroup = GetComponent<CanvasGroup>();
+
+            var backdrop = CreateImage(
+                "Backdrop",
+                _rootRect,
+                new Color(0f, 0f, 0f, 0.48f));
+            Stretch(backdrop.rectTransform, 0f, 0f, 0f, 0f);
+            var backdropButton =
+                backdrop.gameObject.AddComponent<Button>();
+            backdropButton.targetGraphic = backdrop;
+            backdropButton.transition = Selectable.Transition.None;
+            backdropButton.onClick.AddListener(
+                () => CloseRequested?.Invoke());
+
+            var panel = CreateImage(
+                "ConditionPanel",
+                _rootRect,
+                new Color(0.025f, 0.045f, 0.055f, 0.995f));
+            _panelRect = panel.rectTransform;
+            SetAnchors(
+                _panelRect,
+                new Vector2(0.5f, 0.5f),
+                new Vector2(0.5f, 0.5f),
+                new Vector2(0.5f, 0.5f),
+                Vector2.zero,
+                new Vector2(620f, 500f));
+
+            BuildHeader();
+            BuildInputRow();
+            BuildList();
+            Hide();
+        }
+
+        private void BuildHeader()
+        {
+            var header = CreateImage(
+                "Header",
+                _panelRect,
+                new Color(0.055f, 0.085f, 0.10f, 1f));
+            var headerRect = header.rectTransform;
+            headerRect.anchorMin = new Vector2(0f, 1f);
+            headerRect.anchorMax = new Vector2(1f, 1f);
+            headerRect.pivot = new Vector2(0.5f, 1f);
+            headerRect.anchoredPosition = Vector2.zero;
+            headerRect.sizeDelta = new Vector2(0f, 54f);
+
+            _titleText = CreateText(
+                "Title",
+                headerRect,
+                _font,
+                20,
+                FontStyle.Bold,
+                TextAnchor.MiddleCenter,
+                Color.white);
+            Stretch(_titleText.rectTransform, 64f, 64f, 0f, 0f);
+
+            var close = CreateButton(
+                "Close",
+                headerRect,
+                _font,
+                "×",
+                24,
+                new Color(0.24f, 0.08f, 0.08f, 1f));
+            SetAnchors(
+                close.GetComponent<RectTransform>(),
+                Vector2.one,
+                Vector2.one,
+                Vector2.one,
+                new Vector2(-10f, -10f),
+                new Vector2(38f, 34f));
+            close.onClick.AddListener(
+                () => CloseRequested?.Invoke());
+        }
+
+        private void BuildInputRow()
+        {
+            _inputRow = new GameObject(
+                "ConditionInputRow",
+                typeof(RectTransform));
+            var rowRect = _inputRow.GetComponent<RectTransform>();
+            rowRect.SetParent(_panelRect, false);
+            rowRect.anchorMin = new Vector2(0f, 1f);
+            rowRect.anchorMax = new Vector2(1f, 1f);
+            rowRect.pivot = new Vector2(0.5f, 1f);
+            rowRect.anchoredPosition = new Vector2(0f, -66f);
+            rowRect.sizeDelta = new Vector2(-28f, 46f);
+
+            _input = CreateInputField(
+                "ConditionInput",
+                rowRect,
+                _font,
+                "추가할 상태를 입력하십시오.");
+            var inputRect = _input.GetComponent<RectTransform>();
+            inputRect.anchorMin = new Vector2(0f, 0f);
+            inputRect.anchorMax = new Vector2(1f, 1f);
+            inputRect.offsetMin = Vector2.zero;
+            inputRect.offsetMax = new Vector2(-112f, 0f);
+            _input.onEndEdit.AddListener(
+                value =>
+                {
+                    if (Input.GetKeyDown(KeyCode.Return) ||
+                        Input.GetKeyDown(KeyCode.KeypadEnter))
+                    {
+                        HandleAddClicked();
+                    }
+                });
+
+            _addButton = CreateButton(
+                "Add",
+                rowRect,
+                _font,
+                "추가",
+                15,
+                new Color(0.08f, 0.34f, 0.42f, 1f));
+            var addRect = _addButton.GetComponent<RectTransform>();
+            addRect.anchorMin = new Vector2(1f, 0f);
+            addRect.anchorMax = new Vector2(1f, 1f);
+            addRect.pivot = new Vector2(1f, 0.5f);
+            addRect.anchoredPosition = Vector2.zero;
+            addRect.sizeDelta = new Vector2(100f, 0f);
+            _addButton.onClick.AddListener(HandleAddClicked);
+        }
+
+        private void BuildList()
+        {
+            var viewport = CreateImage(
+                "Viewport",
+                _panelRect,
+                new Color(0.015f, 0.025f, 0.032f, 1f));
+            viewport.gameObject.AddComponent<RectMask2D>();
+            var viewportRect = viewport.rectTransform;
+            viewportRect.anchorMin = Vector2.zero;
+            viewportRect.anchorMax = Vector2.one;
+            viewportRect.offsetMin = new Vector2(14f, 14f);
+            viewportRect.offsetMax = new Vector2(-14f, -124f);
+
+            var content = new GameObject(
+                "Content",
+                typeof(RectTransform),
+                typeof(VerticalLayoutGroup),
+                typeof(ContentSizeFitter));
+            _contentRect = content.GetComponent<RectTransform>();
+            _contentRect.SetParent(viewportRect, false);
+            _contentRect.anchorMin = new Vector2(0f, 1f);
+            _contentRect.anchorMax = new Vector2(1f, 1f);
+            _contentRect.pivot = new Vector2(0.5f, 1f);
+            _contentRect.anchoredPosition = Vector2.zero;
+            _contentRect.sizeDelta = Vector2.zero;
+
+            var layout = content.GetComponent<VerticalLayoutGroup>();
+            layout.padding = new RectOffset(8, 8, 8, 8);
+            layout.spacing = 8f;
+            layout.childAlignment = TextAnchor.UpperCenter;
+            layout.childControlHeight = false;
+            layout.childControlWidth = true;
+            layout.childForceExpandHeight = false;
+            layout.childForceExpandWidth = true;
+
+            var fitter = content.GetComponent<ContentSizeFitter>();
+            fitter.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
+            fitter.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+            var scroll = viewport.gameObject.AddComponent<ScrollRect>();
+            scroll.viewport = viewportRect;
+            scroll.content = _contentRect;
+            scroll.horizontal = false;
+            scroll.vertical = true;
+            scroll.movementType = ScrollRect.MovementType.Clamped;
+            scroll.scrollSensitivity = 30f;
+
+            _emptyText = CreateText(
+                "Empty",
+                viewportRect,
+                _font,
+                17,
+                FontStyle.Normal,
+                TextAnchor.MiddleCenter,
+                new Color(0.68f, 0.74f, 0.78f, 1f));
+            _emptyText.text = "등록된 상태가 없습니다.";
+            Stretch(_emptyText.rectTransform, 8f, 8f, 8f, 8f);
+        }
+
+        private void RebuildRows()
+        {
+            if (_contentRect == null)
+                return;
+
+            for (var index = _contentRect.childCount - 1;
+                 index >= 0;
+                 index--)
+            {
+                Destroy(_contentRect.GetChild(index).gameObject);
+            }
+
+            for (var index = 0; index < _conditions.Count; index++)
+                CreateConditionRow(_conditions[index]);
+
+            if (_emptyText != null)
+                _emptyText.gameObject.SetActive(_conditions.Count == 0);
+            LayoutRebuilder.ForceRebuildLayoutImmediate(_contentRect);
+        }
+
+        private void CreateConditionRow(string condition)
+        {
+            var row = new GameObject(
+                "Condition",
+                typeof(RectTransform),
+                typeof(CanvasRenderer),
+                typeof(Image),
+                typeof(LayoutElement));
+            var rowRect = row.GetComponent<RectTransform>();
+            rowRect.SetParent(_contentRect, false);
+            row.GetComponent<Image>().color =
+                new Color(0.055f, 0.09f, 0.105f, 1f);
+            row.GetComponent<LayoutElement>().preferredHeight = 58f;
+
+            var label = CreateText(
+                "Label",
+                rowRect,
+                _font,
+                14,
+                FontStyle.Normal,
+                TextAnchor.MiddleLeft,
+                Color.white);
+            label.text = condition;
+            label.horizontalOverflow = HorizontalWrapMode.Wrap;
+            label.verticalOverflow = VerticalWrapMode.Truncate;
+            Stretch(
+                label.rectTransform,
+                12f,
+                _canEdit ? 94f : 12f,
+                5f,
+                5f);
+
+            if (!_canEdit)
+                return;
+
+            var captured = condition;
+            var remove = CreateButton(
+                "Remove",
+                rowRect,
+                _font,
+                "삭제",
+                13,
+                new Color(0.34f, 0.10f, 0.10f, 1f));
+            var removeRect = remove.GetComponent<RectTransform>();
+            removeRect.anchorMin = new Vector2(1f, 0.5f);
+            removeRect.anchorMax = new Vector2(1f, 0.5f);
+            removeRect.pivot = new Vector2(1f, 0.5f);
+            removeRect.anchoredPosition = new Vector2(-8f, 0f);
+            removeRect.sizeDelta = new Vector2(76f, 34f);
+            remove.onClick.AddListener(
+                () => RemoveRequested?.Invoke(captured));
+        }
+
+        private void HandleAddClicked()
+        {
+            if (!_canEdit || _input == null)
+                return;
+
+            var value = (_input.text ?? string.Empty).Trim();
+            if (value.Length == 0)
+                return;
+            if (value.Length > 200)
+                value = value.Substring(0, 200).TrimEnd();
+
+            AddRequested?.Invoke(value);
+            _input.SetTextWithoutNotify(string.Empty);
+            _input.Select();
+            _input.ActivateInputField();
+        }
+
+        private void OnDestroy()
+        {
+            AddRequested = null;
+            RemoveRequested = null;
+            CloseRequested = null;
+        }
+
+        private static Image CreateImage(
+            string objectName,
+            Transform parent,
+            Color color)
+        {
+            var root = new GameObject(
+                objectName,
+                typeof(RectTransform),
+                typeof(CanvasRenderer),
+                typeof(Image));
+            var rect = root.GetComponent<RectTransform>();
+            rect.SetParent(parent, false);
+            var image = root.GetComponent<Image>();
+            image.color = color;
+            return image;
+        }
+
+        private static Text CreateText(
+            string objectName,
+            Transform parent,
+            Font font,
+            int fontSize,
+            FontStyle style,
+            TextAnchor alignment,
+            Color color)
+        {
+            var root = new GameObject(
+                objectName,
+                typeof(RectTransform),
+                typeof(CanvasRenderer),
+                typeof(Text));
+            var rect = root.GetComponent<RectTransform>();
+            rect.SetParent(parent, false);
+            var text = root.GetComponent<Text>();
+            text.font = font;
+            text.fontSize = fontSize;
+            text.fontStyle = style;
+            text.alignment = alignment;
+            text.color = color;
+            text.horizontalOverflow = HorizontalWrapMode.Wrap;
+            text.verticalOverflow = VerticalWrapMode.Truncate;
+            return text;
+        }
+
+        private static InputField CreateInputField(
+            string objectName,
+            Transform parent,
+            Font font,
+            string placeholder)
+        {
+            var image = CreateImage(
+                objectName,
+                parent,
+                new Color(0.055f, 0.075f, 0.085f, 1f));
+            var input = image.gameObject.AddComponent<InputField>();
+            input.targetGraphic = image;
+            input.lineType = InputField.LineType.SingleLine;
+            input.contentType = InputField.ContentType.Standard;
+            input.characterLimit = 220;
+
+            var placeholderText = CreateText(
+                "Placeholder",
+                image.rectTransform,
+                font,
+                13,
+                FontStyle.Italic,
+                TextAnchor.MiddleLeft,
+                new Color(0.50f, 0.58f, 0.62f, 1f));
+            placeholderText.text = placeholder;
+            Stretch(placeholderText.rectTransform, 10f, 10f, 3f, 3f);
+
+            var valueText = CreateText(
+                "Text",
+                image.rectTransform,
+                font,
+                14,
+                FontStyle.Normal,
+                TextAnchor.MiddleLeft,
+                Color.white);
+            Stretch(valueText.rectTransform, 10f, 10f, 3f, 3f);
+            valueText.raycastTarget = true;
+            input.placeholder = placeholderText;
+            input.textComponent = valueText;
+            input.caretColor = Color.white;
+            input.selectionColor =
+                new Color(0.10f, 0.55f, 0.70f, 0.55f);
+            return input;
+        }
+
+        private static Button CreateButton(
+            string objectName,
+            Transform parent,
+            Font font,
+            string label,
+            int fontSize,
+            Color color)
+        {
+            var image = CreateImage(objectName, parent, color);
+            var button = image.gameObject.AddComponent<Button>();
+            button.targetGraphic = image;
+            var text = CreateText(
+                "Label",
+                image.rectTransform,
+                font,
+                fontSize,
+                FontStyle.Bold,
+                TextAnchor.MiddleCenter,
+                Color.white);
+            text.text = label;
+            text.raycastTarget = false;
+            Stretch(text.rectTransform, 4f, 4f, 2f, 2f);
             return button;
         }
 

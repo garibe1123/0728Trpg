@@ -126,6 +126,7 @@ namespace Trpg.Data.Handouts
 namespace Trpg.UI.Handouts
 {
     using Trpg.Data.Handouts;
+    using Trpg.Pawns;
 
     public readonly struct PublicHandoutRuntimeValue
     {
@@ -180,10 +181,23 @@ namespace Trpg.UI.Handouts
     }
 
     [Serializable]
+    public sealed class PawnHandoutRecordSnapshot
+    {
+        public string PawnInstanceId;
+        public string DefinitionId;
+        public bool IsAvailable;
+        public bool HasOpened;
+        public string FirstOpenedUtc;
+        public string LastOpenedUtc;
+    }
+
+    [Serializable]
     public sealed class PublicHandoutSnapshot
     {
         public List<PublicHandoutEntrySnapshot> Handouts =
             new List<PublicHandoutEntrySnapshot>();
+        public List<PawnHandoutRecordSnapshot> PawnRecords =
+            new List<PawnHandoutRecordSnapshot>();
     }
 
     [DisallowMultipleComponent]
@@ -191,6 +205,8 @@ namespace Trpg.UI.Handouts
     {
         private readonly List<PublicHandoutRuntimeValue> _handouts =
             new List<PublicHandoutRuntimeValue>();
+        private readonly List<PawnHandoutRecordSnapshot> _pawnRecords =
+            new List<PawnHandoutRecordSnapshot>();
 
         private HandoutCatalogDefinition _catalog;
         private bool _isInitialized;
@@ -334,6 +350,12 @@ namespace Trpg.UI.Handouts
                 }
 
                 _handouts.RemoveAt(index);
+                _pawnRecords.RemoveAll(record =>
+                    record != null &&
+                    string.Equals(
+                        record.DefinitionId,
+                        definitionId,
+                        StringComparison.Ordinal));
                 Changed?.Invoke();
                 return true;
             }
@@ -388,6 +410,317 @@ namespace Trpg.UI.Handouts
             return true;
         }
 
+        public IReadOnlyList<PublicHandoutRuntimeValue>
+            GetAvailableForPawn(InteractivePawn pawn)
+        {
+            var result = new List<PublicHandoutRuntimeValue>();
+            var pawnId = ResolvePawnId(pawn);
+            if (string.IsNullOrWhiteSpace(pawnId))
+                return result;
+
+            for (var index = 0; index < _handouts.Count; index++)
+            {
+                var handout = _handouts[index];
+                var record = FindRecord(pawnId, handout.DefinitionId);
+                if (record != null && record.IsAvailable)
+                    result.Add(handout);
+            }
+
+            return result;
+        }
+
+        public bool TryGrantToPawn(
+            InteractivePawn pawn,
+            HandoutDefinition definition,
+            out string error)
+        {
+            error = string.Empty;
+            var pawnId = ResolvePawnId(pawn);
+            if (string.IsNullOrWhiteSpace(pawnId))
+            {
+                error = "핸드아웃을 부여할 Pawn Instance Id가 없습니다.";
+                return false;
+            }
+
+            if (definition == null ||
+                string.IsNullOrWhiteSpace(definition.Id))
+            {
+                error = "부여할 Handout Definition이 유효하지 않습니다.";
+                return false;
+            }
+
+            if (!Contains(definition.Id))
+            {
+                if (!TryAdd(definition, out error))
+                    return false;
+            }
+
+            var record = FindRecord(pawnId, definition.Id);
+            if (record == null)
+            {
+                _pawnRecords.Add(new PawnHandoutRecordSnapshot
+                {
+                    PawnInstanceId = pawnId,
+                    DefinitionId = definition.Id,
+                    IsAvailable = true,
+                    HasOpened = false
+                });
+                Changed?.Invoke();
+                return true;
+            }
+
+            if (record.IsAvailable)
+            {
+                error = "선택한 Pawn에게 이미 공개된 핸드아웃입니다.";
+                return false;
+            }
+
+            record.IsAvailable = true;
+            Changed?.Invoke();
+            return true;
+        }
+
+        public bool TryGrantExistingToPawn(
+            InteractivePawn pawn,
+            string definitionId,
+            out string error)
+        {
+            error = string.Empty;
+            var pawnId = ResolvePawnId(pawn);
+            if (string.IsNullOrWhiteSpace(pawnId))
+            {
+                error = "핸드아웃을 부여할 Pawn Instance Id가 없습니다.";
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(definitionId) ||
+                !Contains(definitionId))
+            {
+                error = "중앙 핸드아웃 목록에서 해당 항목을 찾지 못했습니다.";
+                return false;
+            }
+
+            var record = FindRecord(pawnId, definitionId);
+            if (record == null)
+            {
+                _pawnRecords.Add(new PawnHandoutRecordSnapshot
+                {
+                    PawnInstanceId = pawnId,
+                    DefinitionId = definitionId,
+                    IsAvailable = true,
+                    HasOpened = false
+                });
+                Changed?.Invoke();
+                return true;
+            }
+
+            if (record.IsAvailable)
+                return true;
+
+            record.IsAvailable = true;
+            Changed?.Invoke();
+            return true;
+        }
+
+        public bool TryRevokeFromPawn(
+            InteractivePawn pawn,
+            string definitionId)
+        {
+            var pawnId = ResolvePawnId(pawn);
+            var record = FindRecord(pawnId, definitionId);
+            if (record == null || !record.IsAvailable)
+                return false;
+
+            record.IsAvailable = false;
+            Changed?.Invoke();
+            return true;
+        }
+
+        public bool MarkOpened(
+            InteractivePawn pawn,
+            string definitionId)
+        {
+            var pawnId = ResolvePawnId(pawn);
+            var record = FindRecord(pawnId, definitionId);
+            if (record == null || !record.IsAvailable)
+                return false;
+
+            var now = DateTime.UtcNow.ToString("O");
+            if (!record.HasOpened)
+            {
+                record.HasOpened = true;
+                record.FirstOpenedUtc = now;
+            }
+            record.LastOpenedUtc = now;
+            Changed?.Invoke();
+            return true;
+        }
+
+        public bool TryGetRecordSnapshot(
+            InteractivePawn pawn,
+            string definitionId,
+            out PawnHandoutRecordSnapshot snapshot)
+        {
+            snapshot = null;
+            var record = FindRecord(
+                ResolvePawnId(pawn),
+                definitionId);
+            if (record == null)
+                return false;
+
+            snapshot = CloneRecord(record);
+            return true;
+        }
+
+        public IReadOnlyList<PawnHandoutRecordSnapshot>
+            GetRecordSnapshotsForPawn(InteractivePawn pawn)
+        {
+            var result = new List<PawnHandoutRecordSnapshot>();
+            var pawnId = ResolvePawnId(pawn);
+            if (string.IsNullOrWhiteSpace(pawnId))
+                return result;
+
+            for (var index = 0; index < _pawnRecords.Count; index++)
+            {
+                var record = _pawnRecords[index];
+                if (record != null &&
+                    string.Equals(
+                        record.PawnInstanceId,
+                        pawnId,
+                        StringComparison.Ordinal))
+                {
+                    result.Add(CloneRecord(record));
+                }
+            }
+
+            return result;
+        }
+
+        public bool ApplyNetworkRecord(
+            InteractivePawn pawn,
+            PawnHandoutRecordSnapshot incoming)
+        {
+            if (pawn == null || incoming == null ||
+                string.IsNullOrWhiteSpace(incoming.DefinitionId))
+            {
+                return false;
+            }
+
+            var pawnId = ResolvePawnId(pawn);
+            if (string.IsNullOrWhiteSpace(pawnId))
+                return false;
+
+            if (!Contains(incoming.DefinitionId))
+            {
+                HandoutDefinition definition = null;
+                _catalog?.TryGetById(
+                    incoming.DefinitionId,
+                    out definition);
+                _handouts.Add(
+                    definition != null
+                        ? new PublicHandoutRuntimeValue(
+                            definition,
+                            definition.Id,
+                            definition.HandoutNumber,
+                            definition.Description)
+                        : new PublicHandoutRuntimeValue(
+                            null,
+                            incoming.DefinitionId,
+                            "?",
+                            string.Empty));
+            }
+
+            var record = FindRecord(pawnId, incoming.DefinitionId);
+            if (record == null)
+            {
+                record = new PawnHandoutRecordSnapshot
+                {
+                    PawnInstanceId = pawnId,
+                    DefinitionId = incoming.DefinitionId
+                };
+                _pawnRecords.Add(record);
+            }
+
+            record.IsAvailable = incoming.IsAvailable;
+            record.HasOpened = incoming.HasOpened;
+            record.FirstOpenedUtc = incoming.FirstOpenedUtc;
+            record.LastOpenedUtc = incoming.LastOpenedUtc;
+            Changed?.Invoke();
+            return true;
+        }
+
+        public bool HasOpened(
+            InteractivePawn pawn,
+            string definitionId)
+        {
+            var record = FindRecord(
+                ResolvePawnId(pawn),
+                definitionId);
+            return record != null &&
+                   record.IsAvailable &&
+                   record.HasOpened;
+        }
+
+        private PawnHandoutRecordSnapshot FindRecord(
+            string pawnId,
+            string definitionId)
+        {
+            if (string.IsNullOrWhiteSpace(pawnId) ||
+                string.IsNullOrWhiteSpace(definitionId))
+            {
+                return null;
+            }
+
+            for (var index = 0; index < _pawnRecords.Count; index++)
+            {
+                var record = _pawnRecords[index];
+                if (record != null &&
+                    string.Equals(
+                        record.PawnInstanceId,
+                        pawnId,
+                        StringComparison.Ordinal) &&
+                    string.Equals(
+                        record.DefinitionId,
+                        definitionId,
+                        StringComparison.Ordinal))
+                {
+                    return record;
+                }
+            }
+
+            return null;
+        }
+
+        private static PawnHandoutRecordSnapshot CloneRecord(
+            PawnHandoutRecordSnapshot record)
+        {
+            return record == null
+                ? null
+                : new PawnHandoutRecordSnapshot
+                {
+                    PawnInstanceId = record.PawnInstanceId,
+                    DefinitionId = record.DefinitionId,
+                    IsAvailable = record.IsAvailable,
+                    HasOpened = record.HasOpened,
+                    FirstOpenedUtc = record.FirstOpenedUtc,
+                    LastOpenedUtc = record.LastOpenedUtc
+                };
+        }
+
+        private static string ResolvePawnId(InteractivePawn pawn)
+        {
+            if (pawn == null)
+                return string.Empty;
+
+            if (!string.IsNullOrWhiteSpace(pawn.InstanceId))
+                return pawn.InstanceId.Trim();
+
+            var definitionId = pawn.Definition != null
+                ? pawn.Definition.Id
+                : string.Empty;
+            return definitionId + "|" + pawn.name;
+        }
+
         public PublicHandoutSnapshot CreateSnapshot()
         {
             var snapshot = new PublicHandoutSnapshot();
@@ -400,6 +733,24 @@ namespace Trpg.UI.Handouts
                         DefinitionId = value.DefinitionId,
                         HandoutNumber = value.HandoutNumber,
                         Description = value.Description
+                    });
+            }
+
+            for (var index = 0; index < _pawnRecords.Count; index++)
+            {
+                var record = _pawnRecords[index];
+                if (record == null)
+                    continue;
+
+                snapshot.PawnRecords.Add(
+                    new PawnHandoutRecordSnapshot
+                    {
+                        PawnInstanceId = record.PawnInstanceId,
+                        DefinitionId = record.DefinitionId,
+                        IsAvailable = record.IsAvailable,
+                        HasOpened = record.HasOpened,
+                        FirstOpenedUtc = record.FirstOpenedUtc,
+                        LastOpenedUtc = record.LastOpenedUtc
                     });
             }
 
@@ -467,8 +818,44 @@ namespace Trpg.UI.Handouts
                             stored.Description));
             }
 
+            var restoredRecords =
+                new List<PawnHandoutRecordSnapshot>();
+            var recordKeys = new HashSet<string>(StringComparer.Ordinal);
+            var recordSource = snapshot.PawnRecords ??
+                new List<PawnHandoutRecordSnapshot>();
+            for (var index = 0; index < recordSource.Count; index++)
+            {
+                var storedRecord = recordSource[index];
+                if (storedRecord == null ||
+                    string.IsNullOrWhiteSpace(
+                        storedRecord.PawnInstanceId) ||
+                    string.IsNullOrWhiteSpace(
+                        storedRecord.DefinitionId))
+                {
+                    continue;
+                }
+
+                var key = storedRecord.PawnInstanceId + "\n" +
+                          storedRecord.DefinitionId;
+                if (!recordKeys.Add(key))
+                    continue;
+
+                restoredRecords.Add(
+                    new PawnHandoutRecordSnapshot
+                    {
+                        PawnInstanceId = storedRecord.PawnInstanceId,
+                        DefinitionId = storedRecord.DefinitionId,
+                        IsAvailable = storedRecord.IsAvailable,
+                        HasOpened = storedRecord.HasOpened,
+                        FirstOpenedUtc = storedRecord.FirstOpenedUtc,
+                        LastOpenedUtc = storedRecord.LastOpenedUtc
+                    });
+            }
+
             _handouts.Clear();
             _handouts.AddRange(restored);
+            _pawnRecords.Clear();
+            _pawnRecords.AddRange(restoredRecords);
             _isInitialized = true;
             Changed?.Invoke();
             return true;
@@ -513,6 +900,7 @@ namespace Trpg.UI.Handouts
             new List<HandoutDefinition>();
 
         private HandoutCatalogDefinition _catalog;
+        private string _boundContextId = string.Empty;
         private string _dragDefinitionId;
         private int _dragTargetIndex = -1;
         private CanvasGroup _dragCanvasGroup;
@@ -523,6 +911,7 @@ namespace Trpg.UI.Handouts
         public event Action<HandoutDefinition> AddRequested;
         public event Action<string> RemoveRequested;
         public event Action<string, int> MoveRequested;
+        public event Action<string> Opened;
         public event Action CloseRequested;
 
         public bool IsVisible => _isVisible;
@@ -545,8 +934,22 @@ namespace Trpg.UI.Handouts
 
         public void Bind(
             IReadOnlyList<PublicHandoutRuntimeValue> handouts,
-            HandoutCatalogDefinition catalog)
+            HandoutCatalogDefinition catalog,
+            string contextId = null)
         {
+            var normalizedContext = contextId ?? string.Empty;
+            if (!string.Equals(
+                    _boundContextId,
+                    normalizedContext,
+                    StringComparison.Ordinal))
+            {
+                _boundContextId = normalizedContext;
+                HideCatalogPanel();
+                HideDetailPanel();
+                HideContextPanel();
+                ResetCardDragVisual();
+            }
+
             _catalog = catalog;
             _handouts.Clear();
             if (handouts != null)
@@ -1320,6 +1723,7 @@ namespace Trpg.UI.Handouts
 
         private void ShowDetailPanel(PublicHandoutRuntimeValue handout)
         {
+            Opened?.Invoke(handout.DefinitionId);
             HideCatalogPanel();
             HideContextPanel();
 

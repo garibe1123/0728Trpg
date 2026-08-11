@@ -61,6 +61,10 @@ namespace Trpg.Pawns
         [SerializeField] private PawnSystemSettings _settings;
         [SerializeField] private PawnNavMeshManager _navMeshManager;
 
+        [SerializeField, Tooltip(
+            "이동 모드를 활성화할 때 현재 FieldPawn 배치로 NavMesh를 다시 Bake합니다.")]
+        private bool _rebuildNavMeshWhenMoverActivated = true;
+
         [SerializeField, Min(0f), Tooltip(
             "다른 InteractivePawn Collider 외곽에서 목적지로 지정할 수 없는 거리(m)")]
         private float _interactiveDestinationClearanceMeters = 0.25f;
@@ -156,6 +160,21 @@ namespace Trpg.Pawns
             _selectedMover =
                 pawn != null && pawn.IsMoveable ? pawn : null;
             HidePathPreview();
+
+            if (_selectedMover == null)
+            {
+                HideReachableArea();
+                return;
+            }
+
+            if (_rebuildNavMeshWhenMoverActivated &&
+                _navMeshManager != null)
+            {
+                // Rebuild는 동기식이며 완료 이벤트에서 이동 범위를 다시 계산한다.
+                _navMeshManager.Rebuild();
+                return;
+            }
+
             RefreshReachableArea();
         }
         public void ClearMover()
@@ -691,6 +710,9 @@ namespace Trpg.Pawns
                 0f,
                 _interactiveDestinationClearanceMeters);
 
+            // Transform을 직접 옮긴 Fixed/Legacy Pawn도 같은 프레임에 반영한다.
+            Physics2D.SyncTransforms();
+
             for (var pawnIndex = 0;
                  pawnIndex < _interactivePawns.Count;
                  pawnIndex++)
@@ -713,6 +735,16 @@ namespace Trpg.Pawns
                     _interactiveColliders[pawn] = colliders;
                 }
 
+                // 이동 연출 중에는 Pawn Transform이 출발점에 남아 있으므로,
+                // Collider 형상을 MovementState의 예약 도착점으로 평행 이동해서 검사한다.
+                var currentAnchor = (Vector2)pawn.transform.position;
+                var occupiedAnchor = _states.TryGetValue(
+                    pawn,
+                    out var occupiedState)
+                        ? occupiedState.Position
+                        : pawn.WorldPosition;
+                var occupancyOffset = occupiedAnchor - currentAnchor;
+
                 for (var colliderIndex = 0;
                      colliderIndex < colliders.Length;
                      colliderIndex++)
@@ -725,7 +757,10 @@ namespace Trpg.Pawns
                         continue;
                     }
 
-                    var closest = collider.ClosestPoint(destination);
+                    var localQueryPoint = destination - occupancyOffset;
+                    var closest =
+                        collider.ClosestPoint(localQueryPoint) +
+                        occupancyOffset;
                     var distance = Vector2.Distance(
                         destination,
                         closest);

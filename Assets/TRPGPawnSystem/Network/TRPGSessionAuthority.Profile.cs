@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Text;
 using Fusion;
 using Trpg.UI.Profile;
+using Trpg.UI.Skills;
 using UnityEngine;
 
 namespace Trpg.Pawns
@@ -17,6 +18,19 @@ namespace Trpg.Pawns
         public int ChunkIndex;
         public int ChunkCount;
         public NetworkBool IsSnapshot;
+    }
+
+
+    public struct TRPGNetworkSkillSnapshotItem : INetworkStruct
+    {
+        public NetworkString<_32> PawnDefinitionId;
+        public NetworkString<_32> SkillId;
+        public NetworkString<_32> DisplayName;
+        public int RegularValue;
+        public int Index;
+        public int ExpectedCount;
+        public int Revision;
+        public NetworkBool IsCustom;
     }
 
     public sealed partial class TRPGSessionAuthority
@@ -46,6 +60,21 @@ namespace Trpg.Pawns
             new Dictionary<string, int>(StringComparer.Ordinal);
         private int _localProfileRevision;
         private int _hostProfileRevision;
+
+        private sealed class SkillSnapshotBuffer
+        {
+            public int Revision;
+            public int ExpectedCount;
+            public SkillRuntimeValueSnapshot[] Items;
+            public int ReceivedCount;
+        }
+
+        private readonly Dictionary<string, SkillSnapshotBuffer>
+            _skillSnapshotBuffers =
+                new Dictionary<string, SkillSnapshotBuffer>(
+                    StringComparer.Ordinal);
+        private int _localSkillRevision;
+        private int _hostSkillRevision;
 
         public bool ShouldRouteClientProfileChange =>
             IsOnline && Runner != null && !Runner.IsServer;
@@ -488,5 +517,356 @@ namespace Trpg.Pawns
                     return "플레이어 정보";
             }
         }
+
+        public bool ShouldRouteClientSkillChange =>
+            IsOnline && Runner != null && !Runner.IsServer;
+
+        public bool RequestSkillSnapshot(InteractivePawn pawn)
+        {
+            if (!ShouldRouteClientSkillChange ||
+                !IsGameplayReady ||
+                pawn == null ||
+                !pawn.HasFullCharacterSheet ||
+                pawn.Definition == null)
+            {
+                return false;
+            }
+
+            var state = PlayerSkillState.ResolveOrCreate(
+                pawn.gameObject,
+                pawn.Definition);
+            if (state == null)
+                return false;
+
+            var revision = NextSkillRevision(ref _localSkillRevision);
+            foreach (var packet in CreateSkillPackets(
+                         pawn,
+                         state.CreateSnapshot(),
+                         revision))
+            {
+                RPC_RequestSkillSnapshotItem(packet);
+            }
+
+            return true;
+        }
+
+        public bool PublishHostSkillSnapshot(InteractivePawn pawn)
+        {
+            if (!IsLocalGameMaster ||
+                !Object.HasStateAuthority ||
+                pawn == null ||
+                !pawn.HasFullCharacterSheet ||
+                pawn.Definition == null)
+            {
+                return false;
+            }
+
+            var state = PlayerSkillState.ResolveOrCreate(
+                pawn.gameObject,
+                pawn.Definition);
+            if (state == null)
+                return false;
+
+            GameplayRevision++;
+            BroadcastSkillSnapshot(pawn, state.CreateSnapshot());
+            return true;
+        }
+
+        [Rpc(
+            RpcSources.All,
+            RpcTargets.StateAuthority,
+            HostMode = RpcHostMode.SourceIsHostPlayer)]
+        private void RPC_RequestSkillSnapshotItem(
+            TRPGNetworkSkillSnapshotItem packet,
+            RpcInfo info = default)
+        {
+            if (!Object.HasStateAuthority)
+                return;
+
+            var pawnId = packet.PawnDefinitionId.ToString();
+            if (!TryAuthorizePlayerPawn(
+                    info.Source,
+                    pawnId,
+                    false,
+                    out var pawn,
+                    out var reason))
+            {
+                SendCommandResult(
+                    info.Source,
+                    false,
+                    "스킬",
+                    reason);
+                return;
+            }
+
+            var key = "request|" + info.Source.PlayerId + "|" +
+                      pawnId + "|" + packet.Revision;
+            if (!TryReceiveSkillPacket(packet, key, out var snapshot))
+                return;
+
+            var state = PlayerSkillState.ResolveOrCreate(
+                pawn.gameObject,
+                pawn.Definition);
+            var applyError = string.Empty;
+            if (state == null ||
+                !state.TryApplySnapshot(snapshot, out applyError))
+            {
+                SendCommandResult(
+                    info.Source,
+                    false,
+                    "스킬",
+                    string.IsNullOrWhiteSpace(applyError)
+                        ? "Host에서 스킬 상태를 적용하지 못했습니다."
+                        : applyError);
+                return;
+            }
+
+            GameplayRevision++;
+            BroadcastSkillSnapshot(pawn, snapshot);
+            SendCommandResult(
+                info.Source,
+                true,
+                "스킬",
+                "스킬 상태 저장");
+        }
+
+        [Rpc(
+            RpcSources.StateAuthority,
+            RpcTargets.All)]
+        private void RPC_ApplySkillSnapshotItem(
+            TRPGNetworkSkillSnapshotItem packet)
+        {
+            if (Object.HasStateAuthority)
+                return;
+
+            ApplyIncomingSkillPacket(packet, "broadcast");
+        }
+
+        [Rpc(
+            RpcSources.StateAuthority,
+            RpcTargets.All)]
+        private void RPC_ApplySkillSnapshotItemTarget(
+            [RpcTarget] PlayerRef target,
+            TRPGNetworkSkillSnapshotItem packet)
+        {
+            ApplyIncomingSkillPacket(
+                packet,
+                "target|" + target.PlayerId);
+        }
+
+        private void ApplyIncomingSkillPacket(
+            TRPGNetworkSkillSnapshotItem packet,
+            string channel)
+        {
+            var pawnId = packet.PawnDefinitionId.ToString();
+            var key = channel + "|" + pawnId + "|" +
+                      packet.Revision;
+            if (!TryReceiveSkillPacket(packet, key, out var snapshot))
+                return;
+
+            if (!TryResolvePawnByDefinitionId(pawnId, out var pawn) ||
+                !pawn.HasFullCharacterSheet)
+            {
+                return;
+            }
+
+            var state = PlayerSkillState.ResolveOrCreate(
+                pawn.gameObject,
+                pawn.Definition);
+            if (state == null)
+                return;
+
+            _applyingRemoteState = true;
+            try
+            {
+                state.TryApplySnapshot(snapshot, out _);
+            }
+            finally
+            {
+                _applyingRemoteState = false;
+            }
+        }
+
+        private void BroadcastSkillSnapshot(
+            InteractivePawn pawn,
+            SkillRuntimeSnapshot snapshot)
+        {
+            var revision = NextSkillRevision(ref _hostSkillRevision);
+            foreach (var packet in CreateSkillPackets(
+                         pawn,
+                         snapshot,
+                         revision))
+            {
+                RPC_ApplySkillSnapshotItem(packet);
+            }
+        }
+
+        private void SendSkillSnapshotTo(
+            PlayerRef target,
+            InteractivePawn pawn)
+        {
+            if (target == PlayerRef.None ||
+                pawn == null ||
+                !pawn.HasFullCharacterSheet ||
+                pawn.Definition == null)
+            {
+                return;
+            }
+
+            var state = PlayerSkillState.ResolveOrCreate(
+                pawn.gameObject,
+                pawn.Definition);
+            if (state == null)
+                return;
+
+            var revision = NextSkillRevision(ref _hostSkillRevision);
+            foreach (var packet in CreateSkillPackets(
+                         pawn,
+                         state.CreateSnapshot(),
+                         revision))
+            {
+                RPC_ApplySkillSnapshotItemTarget(target, packet);
+            }
+        }
+
+        private static IEnumerable<TRPGNetworkSkillSnapshotItem>
+            CreateSkillPackets(
+                InteractivePawn pawn,
+                SkillRuntimeSnapshot snapshot,
+                int revision)
+        {
+            var pawnId = pawn != null && pawn.Definition != null
+                ? NormalizeId(pawn.Definition.Id)
+                : string.Empty;
+            var sourceSkills = snapshot != null && snapshot.Skills != null
+                ? snapshot.Skills
+                : new List<SkillRuntimeValueSnapshot>();
+            var skills = new List<SkillRuntimeValueSnapshot>();
+            for (var sourceIndex = 0;
+                 sourceIndex < sourceSkills.Count && skills.Count < 128;
+                 sourceIndex++)
+            {
+                if (sourceSkills[sourceIndex] != null)
+                    skills.Add(sourceSkills[sourceIndex]);
+            }
+
+            var count = skills.Count;
+            if (count == 0)
+            {
+                yield return new TRPGNetworkSkillSnapshotItem
+                {
+                    PawnDefinitionId = Trim(pawnId, 32),
+                    Index = -1,
+                    ExpectedCount = 0,
+                    Revision = revision
+                };
+                yield break;
+            }
+
+            for (var index = 0; index < count; index++)
+            {
+                var skill = skills[index];
+                if (skill == null)
+                    continue;
+
+                yield return new TRPGNetworkSkillSnapshotItem
+                {
+                    PawnDefinitionId = Trim(pawnId, 32),
+                    SkillId = Trim(skill.SkillId, 32),
+                    DisplayName = Trim(skill.DisplayName, 32),
+                    RegularValue = Mathf.Clamp(
+                        skill.RegularValue,
+                        0,
+                        999),
+                    Index = index,
+                    ExpectedCount = count,
+                    Revision = revision,
+                    IsCustom = skill.IsCustom
+                };
+            }
+        }
+
+        private bool TryReceiveSkillPacket(
+            TRPGNetworkSkillSnapshotItem packet,
+            string key,
+            out SkillRuntimeSnapshot snapshot)
+        {
+            snapshot = null;
+            if (packet.Revision <= 0 ||
+                packet.ExpectedCount < 0 ||
+                packet.ExpectedCount > 128)
+            {
+                return false;
+            }
+
+            if (packet.ExpectedCount == 0)
+            {
+                snapshot = new SkillRuntimeSnapshot
+                {
+                    CharacterDefinitionId =
+                        packet.PawnDefinitionId.ToString()
+                };
+                return true;
+            }
+
+            if (packet.Index < 0 ||
+                packet.Index >= packet.ExpectedCount)
+            {
+                return false;
+            }
+
+            if (!_skillSnapshotBuffers.TryGetValue(key, out var buffer) ||
+                buffer.Revision != packet.Revision ||
+                buffer.ExpectedCount != packet.ExpectedCount)
+            {
+                buffer = new SkillSnapshotBuffer
+                {
+                    Revision = packet.Revision,
+                    ExpectedCount = packet.ExpectedCount,
+                    Items = new SkillRuntimeValueSnapshot[
+                        packet.ExpectedCount]
+                };
+                _skillSnapshotBuffers[key] = buffer;
+            }
+
+            if (buffer.Items[packet.Index] == null)
+            {
+                buffer.Items[packet.Index] =
+                    new SkillRuntimeValueSnapshot
+                    {
+                        SkillId = packet.SkillId.ToString(),
+                        DisplayName = packet.DisplayName.ToString(),
+                        RegularValue = packet.RegularValue,
+                        IsCustom = packet.IsCustom
+                    };
+                buffer.ReceivedCount++;
+            }
+
+            if (buffer.ReceivedCount < buffer.ExpectedCount)
+                return false;
+
+            snapshot = new SkillRuntimeSnapshot
+            {
+                CharacterDefinitionId =
+                    packet.PawnDefinitionId.ToString()
+            };
+            for (var index = 0; index < buffer.Items.Length; index++)
+            {
+                if (buffer.Items[index] != null)
+                    snapshot.Skills.Add(buffer.Items[index]);
+            }
+
+            _skillSnapshotBuffers.Remove(key);
+            return snapshot.Skills.Count == buffer.ExpectedCount;
+        }
+
+        private static int NextSkillRevision(ref int revision)
+        {
+            revision = revision == int.MaxValue
+                ? 1
+                : revision + 1;
+            return revision;
+        }
+
     }
 }

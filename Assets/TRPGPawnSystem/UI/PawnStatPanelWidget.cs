@@ -56,6 +56,168 @@ namespace Trpg.Pawns
         }
     }
 
+    [Serializable]
+    public sealed class CoCSanityRuntimeSnapshot
+    {
+        public int PeriodStartSan;
+        public int PeriodLoss;
+        public bool TemporaryInsanityDetected;
+        public bool IndefiniteInsanityDetected;
+        public bool PermanentInsanityDetected;
+    }
+
+    public readonly struct CoCSanityEvaluation
+    {
+        public CoCSanityEvaluation(
+            int periodStartSan,
+            int periodLoss,
+            bool temporaryDetected,
+            bool indefiniteDetected,
+            bool permanentDetected,
+            bool temporaryNew,
+            bool indefiniteNew,
+            bool permanentNew)
+        {
+            PeriodStartSan = periodStartSan;
+            PeriodLoss = periodLoss;
+            TemporaryDetected = temporaryDetected;
+            IndefiniteDetected = indefiniteDetected;
+            PermanentDetected = permanentDetected;
+            TemporaryNew = temporaryNew;
+            IndefiniteNew = indefiniteNew;
+            PermanentNew = permanentNew;
+        }
+
+        public int PeriodStartSan { get; }
+        public int PeriodLoss { get; }
+        public bool TemporaryDetected { get; }
+        public bool IndefiniteDetected { get; }
+        public bool PermanentDetected { get; }
+        public bool TemporaryNew { get; }
+        public bool IndefiniteNew { get; }
+        public bool PermanentNew { get; }
+        public bool HasNewCondition =>
+            TemporaryNew || IndefiniteNew || PermanentNew;
+    }
+
+    [DisallowMultipleComponent]
+    public sealed class CoCSanityRuntimeState : MonoBehaviour
+    {
+        [SerializeField] private int _periodStartSan;
+        [SerializeField] private int _periodLoss;
+        [SerializeField] private bool _temporaryInsanityDetected;
+        [SerializeField] private bool _indefiniteInsanityDetected;
+        [SerializeField] private bool _permanentInsanityDetected;
+
+        public int PeriodStartSan => _periodStartSan;
+        public int PeriodLoss => _periodLoss;
+
+        public CoCSanityEvaluation RecordLoss(
+            int previousSan,
+            int currentSan,
+            int loss,
+            int singleLossThreshold,
+            float periodLossRatio)
+        {
+            previousSan = Mathf.Max(0, previousSan);
+            currentSan = Mathf.Max(0, currentSan);
+            loss = Mathf.Max(0, loss);
+            singleLossThreshold = Mathf.Max(1, singleLossThreshold);
+            periodLossRatio = Mathf.Clamp01(periodLossRatio);
+
+            if (_periodStartSan <= 0)
+            {
+                _periodStartSan = previousSan;
+            }
+
+            _periodLoss = Mathf.Max(0, _periodLoss + loss);
+            var periodThreshold = Mathf.Max(
+                1,
+                Mathf.CeilToInt(_periodStartSan * periodLossRatio));
+
+            var temporary = loss >= singleLossThreshold;
+            var indefinite = _periodLoss >= periodThreshold;
+            var permanent = currentSan <= 0;
+            var temporaryNew =
+                temporary && !_temporaryInsanityDetected;
+            var indefiniteNew =
+                indefinite && !_indefiniteInsanityDetected;
+            var permanentNew =
+                permanent && !_permanentInsanityDetected;
+
+            _temporaryInsanityDetected |= temporary;
+            _indefiniteInsanityDetected |= indefinite;
+            _permanentInsanityDetected |= permanent;
+
+            return new CoCSanityEvaluation(
+                _periodStartSan,
+                _periodLoss,
+                _temporaryInsanityDetected,
+                _indefiniteInsanityDetected,
+                _permanentInsanityDetected,
+                temporaryNew,
+                indefiniteNew,
+                permanentNew);
+        }
+
+        public void ResetPeriod(int currentSan)
+        {
+            _periodStartSan = Mathf.Max(0, currentSan);
+            _periodLoss = 0;
+            _temporaryInsanityDetected = false;
+            _indefiniteInsanityDetected = false;
+            _permanentInsanityDetected = currentSan <= 0;
+        }
+
+        public CoCSanityRuntimeSnapshot CreateSnapshot()
+        {
+            return new CoCSanityRuntimeSnapshot
+            {
+                PeriodStartSan = _periodStartSan,
+                PeriodLoss = _periodLoss,
+                TemporaryInsanityDetected =
+                    _temporaryInsanityDetected,
+                IndefiniteInsanityDetected =
+                    _indefiniteInsanityDetected,
+                PermanentInsanityDetected =
+                    _permanentInsanityDetected
+            };
+        }
+
+        public bool TryApplySnapshot(
+            CoCSanityRuntimeSnapshot snapshot)
+        {
+            if (snapshot == null)
+            {
+                return false;
+            }
+
+            _periodStartSan = Mathf.Max(0, snapshot.PeriodStartSan);
+            _periodLoss = Mathf.Max(0, snapshot.PeriodLoss);
+            _temporaryInsanityDetected =
+                snapshot.TemporaryInsanityDetected;
+            _indefiniteInsanityDetected =
+                snapshot.IndefiniteInsanityDetected;
+            _permanentInsanityDetected =
+                snapshot.PermanentInsanityDetected;
+            return true;
+        }
+
+        public static CoCSanityRuntimeState ResolveOrCreate(
+            InteractivePawn pawn)
+        {
+            if (pawn == null)
+            {
+                return null;
+            }
+
+            var state = pawn.GetComponent<CoCSanityRuntimeState>();
+            return state != null
+                ? state
+                : pawn.gameObject.AddComponent<CoCSanityRuntimeState>();
+        }
+    }
+
     public readonly struct PawnStatAxisData
     {
         public PawnStatAxisData(
@@ -372,6 +534,9 @@ namespace Trpg.Pawns
             public Text Label;
             public InputField CurrentInput;
             public InputField MaximumInput;
+            public Button RollButton;
+            public Button ConditionButton;
+            public PawnResourceValueData Data;
         }
 
         private readonly List<ResourceVisual> _visuals =
@@ -385,8 +550,11 @@ namespace Trpg.Pawns
         private double _pendingValue;
         private float _pendingDeadline;
         private bool _hasPendingEdit;
+        private bool _conditionEditingEnabled;
 
         public event Action<string, double> ValueEditRequested;
+        public event Action<PawnResourceValueData> RollRequested;
+        public event Action<PawnResourceValueData> ConditionRequested;
 
         public bool HasActiveEdit
         {
@@ -458,6 +626,21 @@ namespace Trpg.Pawns
             return widget;
         }
 
+        public void SetConditionEditingEnabled(bool enabled)
+        {
+            if (_conditionEditingEnabled == enabled)
+                return;
+
+            _conditionEditingEnabled = enabled;
+            for (var index = 0; index < _visuals.Count; index++)
+            {
+                var visual = _visuals[index];
+                BindConditionButton(
+                    visual.ConditionButton,
+                    visual.Data);
+            }
+        }
+
         public void Bind(
             IReadOnlyList<PawnResourceValueData> resources)
         {
@@ -470,6 +653,7 @@ namespace Trpg.Pawns
                     continue;
 
                 var visual = GetVisual(used);
+                visual.Data = data;
                 visual.Label.text = data.Label ?? string.Empty;
                 BindValueInput(
                     visual.CurrentInput,
@@ -481,6 +665,8 @@ namespace Trpg.Pawns
                     data.MaximumStatId,
                     data.Maximum,
                     data.CanEditMaximum);
+                BindRollButton(visual.RollButton, data);
+                BindConditionButton(visual.ConditionButton, data);
                 visual.Root.SetActive(true);
                 used++;
             }
@@ -505,6 +691,11 @@ namespace Trpg.Pawns
                 visual.CurrentInput.onEndEdit.RemoveAllListeners();
                 visual.MaximumInput.onValueChanged.RemoveAllListeners();
                 visual.MaximumInput.onEndEdit.RemoveAllListeners();
+                if (visual.RollButton != null)
+                    visual.RollButton.onClick.RemoveAllListeners();
+                if (visual.ConditionButton != null)
+                    visual.ConditionButton.onClick.RemoveAllListeners();
+                visual.Data = default;
                 visual.Root.SetActive(false);
             }
 
@@ -590,7 +781,7 @@ namespace Trpg.Pawns
             labelRect.anchorMin = Vector2.zero;
             labelRect.anchorMax = Vector2.one;
             labelRect.offsetMin = new Vector2(9f, 3f);
-            labelRect.offsetMax = new Vector2(-9f, -3f);
+            labelRect.offsetMax = new Vector2(-122f, -3f);
 
             var currentInput = CreateValueInput(
                 "Current",
@@ -620,12 +811,75 @@ namespace Trpg.Pawns
                 new Vector2(2f, 4f),
                 new Vector2(-7f, -2f));
 
+            var rollRoot = new GameObject(
+                "RollButton",
+                typeof(RectTransform),
+                typeof(CanvasRenderer),
+                typeof(Image),
+                typeof(Button));
+            rollRoot.transform.SetParent(root.transform, false);
+            var rollRect = rollRoot.GetComponent<RectTransform>();
+            rollRect.anchorMin = new Vector2(1f, 1f);
+            rollRect.anchorMax = new Vector2(1f, 1f);
+            rollRect.pivot = new Vector2(1f, 1f);
+            rollRect.anchoredPosition = new Vector2(-72f, -5f);
+            rollRect.sizeDelta = new Vector2(48f, 22f);
+            var rollImage = rollRoot.GetComponent<Image>();
+            rollImage.color = new Color(0.08f, 0.30f, 0.36f, 0.98f);
+            var rollButton = rollRoot.GetComponent<Button>();
+            rollButton.targetGraphic = rollImage;
+            var rollText = CreateText(
+                "Label",
+                rollRoot.transform,
+                11,
+                TextAnchor.MiddleCenter);
+            rollText.text = "굴림";
+            var rollTextRect = rollText.rectTransform;
+            rollTextRect.anchorMin = Vector2.zero;
+            rollTextRect.anchorMax = Vector2.one;
+            rollTextRect.offsetMin = Vector2.zero;
+            rollTextRect.offsetMax = Vector2.zero;
+
+            var conditionRoot = new GameObject(
+                "ConditionButton",
+                typeof(RectTransform),
+                typeof(CanvasRenderer),
+                typeof(Image),
+                typeof(Button));
+            conditionRoot.transform.SetParent(root.transform, false);
+            var conditionRect =
+                conditionRoot.GetComponent<RectTransform>();
+            conditionRect.anchorMin = new Vector2(1f, 1f);
+            conditionRect.anchorMax = new Vector2(1f, 1f);
+            conditionRect.pivot = new Vector2(1f, 1f);
+            conditionRect.anchoredPosition = new Vector2(-6f, -5f);
+            conditionRect.sizeDelta = new Vector2(62f, 22f);
+            var conditionImage = conditionRoot.GetComponent<Image>();
+            conditionImage.color =
+                new Color(0.22f, 0.20f, 0.08f, 0.98f);
+            var conditionButton =
+                conditionRoot.GetComponent<Button>();
+            conditionButton.targetGraphic = conditionImage;
+            var conditionText = CreateText(
+                "Label",
+                conditionRoot.transform,
+                10,
+                TextAnchor.MiddleCenter);
+            conditionText.text = "상태추가";
+            var conditionTextRect = conditionText.rectTransform;
+            conditionTextRect.anchorMin = Vector2.zero;
+            conditionTextRect.anchorMax = Vector2.one;
+            conditionTextRect.offsetMin = Vector2.zero;
+            conditionTextRect.offsetMax = Vector2.zero;
+
             return new ResourceVisual
             {
                 Root = root,
                 Label = label,
                 CurrentInput = currentInput,
-                MaximumInput = maximumInput
+                MaximumInput = maximumInput,
+                RollButton = rollButton,
+                ConditionButton = conditionButton
             };
         }
 
@@ -668,6 +922,48 @@ namespace Trpg.Pawns
             input.textComponent = text;
             input.contentType = InputField.ContentType.DecimalNumber;
             return input;
+        }
+
+        private void BindRollButton(
+            Button button,
+            PawnResourceValueData data)
+        {
+            if (button == null)
+                return;
+
+            button.onClick.RemoveAllListeners();
+            var supported =
+                string.Equals(data.Label, "체력", StringComparison.Ordinal) ||
+                string.Equals(data.Label, "이성", StringComparison.Ordinal);
+            button.gameObject.SetActive(supported);
+            button.interactable = supported &&
+                                  !string.IsNullOrWhiteSpace(
+                                      data.CurrentStatId);
+            if (button.interactable)
+                button.onClick.AddListener(() => RollRequested?.Invoke(data));
+        }
+
+        private void BindConditionButton(
+            Button button,
+            PawnResourceValueData data)
+        {
+            if (button == null)
+                return;
+
+            button.onClick.RemoveAllListeners();
+            var supported =
+                string.Equals(data.Label, "체력", StringComparison.Ordinal) ||
+                string.Equals(data.Label, "이성", StringComparison.Ordinal);
+            var visible = supported && _conditionEditingEnabled;
+            button.gameObject.SetActive(visible);
+            button.interactable = visible &&
+                                  !string.IsNullOrWhiteSpace(
+                                      data.CurrentStatId);
+            if (button.interactable)
+            {
+                button.onClick.AddListener(
+                    () => ConditionRequested?.Invoke(data));
+            }
         }
 
         private void BindValueInput(

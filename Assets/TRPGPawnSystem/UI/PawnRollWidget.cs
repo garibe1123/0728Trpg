@@ -118,6 +118,7 @@ namespace Trpg.Pawns
         public event Action RollInputOpened;
         public event Action<PawnCheckRollRequest> CheckRollRequested;
         public event Action<PawnEffectRollRequest> EffectRollRequested;
+        public event Action<PawnResourceRollRequest> ResourceRollRequested;
         public event Action PresentationCompleted;
         public float ReservedRightWidth => _reservedRightWidth;
 
@@ -139,6 +140,36 @@ namespace Trpg.Pawns
             widget.SetButtonsEnabled(false);
             widget.CancelPresentation();
             return widget;
+        }
+
+        public void ConfigureOverlayCanvas(
+            RectTransform canvasRect)
+        {
+            _canvasRect = ResolveCanvasRect(
+                canvasRect,
+                transform as RectTransform);
+            if (_canvasRect == null)
+                return;
+
+            if (_presentationRect != null &&
+                _presentationRect.parent != _canvasRect)
+            {
+                _presentationRect.SetParent(_canvasRect, false);
+            }
+
+            if (_presentationRect != null)
+            {
+                _presentationRect.anchorMin =
+                    new Vector2(0.5f, 0.5f);
+                _presentationRect.anchorMax =
+                    new Vector2(0.5f, 0.5f);
+                _presentationRect.pivot =
+                    new Vector2(0.5f, 0.5f);
+                _presentationRect.anchoredPosition = Vector2.zero;
+            }
+
+            _inputWidget?.SetOverlayParent(_canvasRect);
+            RefreshPresentationLayout();
         }
 
         public void ConfigureResponsiveLayout(
@@ -174,6 +205,7 @@ namespace Trpg.Pawns
                 _presentationRect.anchoredPosition = Vector2.zero;
             }
 
+            _inputWidget?.SetOverlayParent(_canvasRect);
             RefreshResponsiveLayout();
         }
 
@@ -240,6 +272,23 @@ namespace Trpg.Pawns
             }
         }
 
+        public void OpenResourceRoll(
+            in PawnResourceValueData resource,
+            bool useCallOfCthulhuRules)
+        {
+            CancelRoutine();
+            if (_presentationRoot != null)
+            {
+                _presentationRoot.SetActive(false);
+            }
+
+            RollInputOpened?.Invoke();
+            MoveButtons(true);
+            _inputWidget?.OpenResource(
+                resource,
+                useCallOfCthulhuRules);
+        }
+
         public void Play(in PawnRollPresentationData data)
         {
             CancelRoutine();
@@ -262,7 +311,37 @@ namespace Trpg.Pawns
             }
 
             _presentationRoutine =
-                StartCoroutine(PlayPresentation(data));
+                StartCoroutine(PlayPresentation(data, true));
+        }
+
+        public void PlayModifiedD100(
+            D100ModifiedRollResult modifiedRoll,
+            in PawnRollPresentationData finalData)
+        {
+            if (modifiedRoll == null ||
+                !modifiedRoll.HasAdditionalTensDice)
+            {
+                Play(finalData);
+                return;
+            }
+
+            CancelRoutine();
+            _inputWidget?.HideImmediate();
+            MoveButtons(true);
+            if (_presentationRoot != null)
+                _presentationRoot.SetActive(true);
+
+            if (_presentationRect != null)
+            {
+                _presentationRect.localScale =
+                    new Vector3(0.92f, 0.06f, 1f);
+            }
+
+            if (_presentationCanvasGroup != null)
+                _presentationCanvasGroup.alpha = 0f;
+
+            _presentationRoutine = StartCoroutine(
+                PlayModifiedD100Sequence(modifiedRoll, finalData));
         }
 
         public void CancelPresentation()
@@ -293,7 +372,8 @@ namespace Trpg.Pawns
         }
 
         private IEnumerator PlayPresentation(
-            PawnRollPresentationData data)
+            PawnRollPresentationData data,
+            bool complete)
         {
             yield return AnimatePresentationOpen();
 
@@ -555,9 +635,51 @@ namespace Trpg.Pawns
                 _counterText.rectTransform.localScale = Vector3.one;
             }
 
-            _presentationRoutine = null;
-            MoveButtons(false);
-            PresentationCompleted?.Invoke();
+            if (complete)
+            {
+                _presentationRoutine = null;
+                MoveButtons(false);
+                PresentationCompleted?.Invoke();
+            }
+        }
+
+        private IEnumerator PlayModifiedD100Sequence(
+            D100ModifiedRollResult modifiedRoll,
+            PawnRollPresentationData finalData)
+        {
+            var baseData = new PawnRollPresentationData(
+                finalData.Title,
+                "기본 d100",
+                modifiedRoll.BaseRoll,
+                1,
+                100,
+                $"기본 결과 {modifiedRoll.BaseRoll}",
+                "추가 십의 자리 주사위를 굴립니다.",
+                finalData.ResultColor,
+                1.05f,
+                finalData.CheckTarget);
+            yield return PlayPresentation(baseData, false);
+
+            for (var index = 1;
+                 index < modifiedRoll.TensDice.Count;
+                 index++)
+            {
+                var tens = modifiedRoll.TensDice[index];
+                var candidate = modifiedRoll.CandidateRolls[index];
+                var extraData = new PawnRollPresentationData(
+                    finalData.Title,
+                    $"{modifiedRoll.ModifierLabel} · 추가 십의 자리",
+                    tens,
+                    0,
+                    9,
+                    $"추가 후보 {candidate}",
+                    modifiedRoll.GetCandidateLabel(),
+                    finalData.ResultColor,
+                    0.72f);
+                yield return PlayPresentation(extraData, false);
+            }
+
+            yield return PlayPresentation(finalData, true);
         }
 
         private IEnumerator AnimatePointerSegment(
@@ -1129,12 +1251,27 @@ namespace Trpg.Pawns
         private void OnDisable()
         {
             UnbindListeners();
-            CancelRoutine();
+            CancelPresentation();
         }
 
         private void OnDestroy()
         {
             UnbindListeners();
+            if (_inputWidget != null &&
+                _inputWidget.transform.parent != transform)
+            {
+                Destroy(_inputWidget.gameObject);
+                _inputWidget = null;
+            }
+
+            if (_presentationRoot != null &&
+                _presentationRoot.transform.parent != transform)
+            {
+                Destroy(_presentationRoot);
+                _presentationRoot = null;
+                _presentationRect = null;
+            }
+
             if (_ownsRuntimeAudioClips)
             {
                 Destroy(_tickClip);
@@ -1144,6 +1281,7 @@ namespace Trpg.Pawns
             RollInputOpened = null;
             CheckRollRequested = null;
             EffectRollRequested = null;
+            ResourceRollRequested = null;
             PresentationCompleted = null;
         }
 
@@ -1162,6 +1300,7 @@ namespace Trpg.Pawns
             {
                 _inputWidget.CheckConfirmed += HandleCheckConfirmed;
                 _inputWidget.EffectConfirmed += HandleEffectConfirmed;
+                _inputWidget.ResourceConfirmed += HandleResourceConfirmed;
                 _inputWidget.Cancelled += HandleInputCancelled;
             }
 
@@ -1189,6 +1328,7 @@ namespace Trpg.Pawns
             {
                 _inputWidget.CheckConfirmed -= HandleCheckConfirmed;
                 _inputWidget.EffectConfirmed -= HandleEffectConfirmed;
+                _inputWidget.ResourceConfirmed -= HandleResourceConfirmed;
                 _inputWidget.Cancelled -= HandleInputCancelled;
             }
 
@@ -1238,6 +1378,12 @@ namespace Trpg.Pawns
             _defaultDiceSides = request.DiceSides;
             _defaultDiceModifier = request.Modifier;
             EffectRollRequested?.Invoke(request);
+        }
+
+        private void HandleResourceConfirmed(
+            PawnResourceRollRequest request)
+        {
+            ResourceRollRequested?.Invoke(request);
         }
 
         private void HandleInputCancelled()

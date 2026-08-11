@@ -24,6 +24,9 @@ namespace Trpg.Pawns
 
         private readonly List<FieldPawn> _fieldPawns =
             new List<FieldPawn>();
+        private readonly List<Collider2D>
+            _temporarilyDisabledInteractiveColliders =
+                new List<Collider2D>();
 
         private NavMeshSurface _surface;
         private CollectSources2d _sources2d;
@@ -39,9 +42,20 @@ namespace Trpg.Pawns
             ConfigureFor2D();
             PrepareFieldPawns();
 
-            Physics2D.SyncTransforms();
-            _surface.BuildNavMesh();
-            IsRuntimeBakeReady = true;
+            // NavMesh에는 정적 FieldPawn만 반영하고, 이동하는 Pawn은
+            // PawnMovementManager의 동적 점유 판정으로 별도 처리한다.
+            DisableInteractivePawnCollidersForBake();
+            try
+            {
+                Physics2D.SyncTransforms();
+                _surface.BuildNavMesh();
+                IsRuntimeBakeReady = true;
+            }
+            finally
+            {
+                RestoreInteractivePawnCollidersAfterBake();
+                Physics2D.SyncTransforms();
+            }
 
             LogBakeResult();
             RuntimeBakeCompleted?.Invoke();
@@ -217,6 +231,55 @@ namespace Trpg.Pawns
                     $"[{name}] 활성화된 FieldPawn이 하나도 없습니다.",
                     this);
             }
+        }
+
+        private void DisableInteractivePawnCollidersForBake()
+        {
+            _temporarilyDisabledInteractiveColliders.Clear();
+
+#if UNITY_2022_2_OR_NEWER
+            var pawns = FindObjectsByType<InteractivePawn>(
+                FindObjectsInactive.Exclude,
+                FindObjectsSortMode.None);
+#else
+            var pawns = FindObjectsOfType<InteractivePawn>(false);
+#endif
+
+            for (var pawnIndex = 0; pawnIndex < pawns.Length; pawnIndex++)
+            {
+                var pawn = pawns[pawnIndex];
+                if (pawn == null)
+                    continue;
+
+                var colliders =
+                    pawn.GetComponentsInChildren<Collider2D>(true);
+                for (var colliderIndex = 0;
+                     colliderIndex < colliders.Length;
+                     colliderIndex++)
+                {
+                    var collider = colliders[colliderIndex];
+                    if (collider == null || !collider.enabled)
+                        continue;
+
+                    collider.enabled = false;
+                    _temporarilyDisabledInteractiveColliders.Add(collider);
+                }
+            }
+        }
+
+        private void RestoreInteractivePawnCollidersAfterBake()
+        {
+            for (var index = 0;
+                 index < _temporarilyDisabledInteractiveColliders.Count;
+                 index++)
+            {
+                var collider =
+                    _temporarilyDisabledInteractiveColliders[index];
+                if (collider != null)
+                    collider.enabled = true;
+            }
+
+            _temporarilyDisabledInteractiveColliders.Clear();
         }
 
         private void LogBakeResult()

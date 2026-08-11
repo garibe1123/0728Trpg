@@ -15,8 +15,10 @@ MonoBehaviour:
   _id: interactive_new
   _kind: 1
   _moveableKind: 1
+  _npcMovementMode: 0
   _displayName: Npc01
   _description: Npc01
+  _gmInstructions: 
   _portrait: {fileID: 21300000, guid: 6e142000690956a4eb2efa66fcc173b5, type: 3}
   _legacyMoveMeters: 0
   _legacyMoveMetersPerTurn: 0
@@ -51,3 +53,28 @@ MonoBehaviour:
   _presentationHopHeight: 0.2
   _presentationRotationDegrees: 7
   _selectedScale: 1.08
+  _visualMode: 1
+  _legacyUseModularSpriteMotion: 0
+  _visualModeMigrated: 1
+  _simpleVisual: {fileID: 0}
+  _defaultAppearance:
+    _height: 2
+    _broadShoulders: 1
+    _headId: 0
+    _hairFrontId: 255
+    _hairBackId: 255
+    _hatId: 255
+    _topId: 255
+    _bottomId: 255
+    _shoesId: 255
+    _eyesId: 0
+    _legsId: 0
+    _skinColor:
+      serializedVersion: 2
+      rgba: 4287934176
+    _hairColor:
+      serializedVersion: 2
+      rgba: 4281154158
+    _eyeColor:
+      serializedVersion: 2
+      rgba: 4284110893

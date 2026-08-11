@@ -3,6 +3,12 @@ using UnityEngine.Serialization;
 
 namespace Trpg.Pawns
 {
+    public enum CampaignRuleSet
+    {
+        CallOfCthulhu7E = 0,
+        Generic = 1
+    }
+
     [CreateAssetMenu(
         menuName = "Trpg/Pawn/Pawn System Settings",
         fileName = "PawnSystemSettings")]
@@ -10,6 +16,20 @@ namespace Trpg.Pawns
     {
         [SerializeField, Tooltip("세이브 및 네트워크에서 사용할 설정 ID")]
         private string _id = "pawn_system_default";
+
+        [Header("Rule Set")]
+        [SerializeField, Tooltip(
+            "캠페인에서 사용할 규칙 보조 계층. Generic은 범용 기능만 사용합니다.")]
+        private CampaignRuleSet _campaignRuleSet =
+            CampaignRuleSet.CallOfCthulhu7E;
+
+        [SerializeField, Min(1), Tooltip(
+            "CoC에서 한 번에 이 수치 이상 SAN을 잃으면 광기 조건으로 알립니다.")]
+        private int _cocSingleSanityLossThreshold = 5;
+
+        [SerializeField, Range(0.01f, 1f), Tooltip(
+            "CoC에서 기간 시작 SAN 대비 이 비율 이상 잃으면 장기 광기 조건으로 알립니다.")]
+        private float _cocPeriodSanityLossRatio = 0.2f;
 
         [Header("Movement")]
         [FormerlySerializedAs("_defaultMoveMeters")]
@@ -78,6 +98,13 @@ namespace Trpg.Pawns
         private float _hideDuration = 0.16f;
 
         public string Id => _id;
+        public CampaignRuleSet RuleSet => _campaignRuleSet;
+        public bool UsesCallOfCthulhuRules =>
+            _campaignRuleSet == CampaignRuleSet.CallOfCthulhu7E;
+        public int CocSingleSanityLossThreshold =>
+            Mathf.Max(1, _cocSingleSanityLossThreshold);
+        public float CocPeriodSanityLossRatio =>
+            Mathf.Clamp(_cocPeriodSanityLossRatio, 0.01f, 1f);
         public int DefaultMovementScore
         {
             get
