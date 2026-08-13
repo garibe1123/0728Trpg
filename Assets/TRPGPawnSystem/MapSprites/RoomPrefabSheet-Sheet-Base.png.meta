@@ -1,0 +1,481 @@
+fileFormatVersion: 2
+guid: 8fbb8de6020351842ad21d4d82345f1f
+TextureImporter:
+  internalIDToNameTable:
+  - first:
+      213: -2929269901190373020
+    second: RoomPrefabSheet-Sheet-Base_0
+  - first:
+      213: -7019971671791122177
+    second: RoomPrefabSheet-Sheet-Base_1
+  - first:
+      213: 7692114636575669616
+    second: RoomPrefabSheet-Sheet-Base_2
+  - first:
+      213: 8086770466522642842
+    second: RoomPrefabSheet-Sheet-Base_3
+  - first:
+      213: 2499435679043036687
+    second: RoomPrefabSheet-Sheet-Base_4
+  - first:
+      213: 4047314053510083872
+    second: RoomPrefabSheet-Sheet-Base_5
+  - first:
+      213: 8164094590314293893
+    second: RoomPrefabSheet-Sheet-Base_6
+  - first:
+      213: -8396024234808945663
+    second: RoomPrefabSheet-Sheet-Base_7
+  - first:
+      213: 8941033467280969471
+    second: RoomPrefabSheet-Sheet-Base_8
+  - first:
+      213: -5791660747508316360
+    second: RoomPrefabSheet-Sheet-Base_9
+  - first:
+      213: 1852688688867050092
+    second: RoomPrefabSheet-Sheet-Base_10
+  - first:
+      213: 3213078674910146102
+    second: RoomPrefabSheet-Sheet-Base_11
+  - first:
+      213: 2419733830129958588
+    second: RoomPrefabSheet-Sheet-Base_12
+  - first:
+      213: -6681715338608715340
+    second: RoomPrefabSheet-Sheet-Base_13
+  externalObjects: {}
+  serializedVersion: 13
+  mipmaps:
+    mipMapMode: 0
+    enableMipMap: 0
+    sRGBTexture: 1
+    linearTexture: 0
+    fadeOut: 0
+    borderMipMap: 0
+    mipMapsPreserveCoverage: 0
+    alphaTestReferenceValue: 0.5
+    mipMapFadeDistanceStart: 1
+    mipMapFadeDistanceEnd: 3
+  bumpmap:
+    convertToNormalMap: 0
+    externalNormalMap: 0
+    heightScale: 0.25
+    normalMapFilter: 0
+    flipGreenChannel: 0
+  isReadable: 0
+  streamingMipmaps: 0
+  streamingMipmapsPriority: 0
+  vTOnly: 0
+  ignoreMipmapLimit: 0
+  grayScaleToAlpha: 0
+  generateCubemap: 6
+  cubemapConvolution: 0
+  seamlessCubemap: 0
+  textureFormat: 1
+  maxTextureSize: 2048
+  textureSettings:
+    serializedVersion: 2
+    filterMode: 0
+    aniso: 1
+    mipBias: 0
+    wrapU: 1
+    wrapV: 1
+    wrapW: 1
+  nPOTScale: 0
+  lightmap: 0
+  compressionQuality: 50
+  spriteMode: 2
+  spriteExtrude: 1
+  spriteMeshType: 1
+  alignment: 0
+  spritePivot: {x: 0.5, y: 0.5}
+  spritePixelsToUnits: 16
+  spriteBorder: {x: 0, y: 0, z: 0, w: 0}
+  spriteGenerateFallbackPhysicsShape: 1
+  alphaUsage: 1
+  alphaIsTransparency: 1
+  spriteTessellationDetail: -1
+  textureType: 8
+  textureShape: 1
+  singleChannelComponent: 0
+  flipbookRows: 1
+  flipbookColumns: 1
+  maxTextureSizeSet: 0
+  compressionQualitySet: 0
+  textureFormatSet: 0
+  ignorePngGamma: 0
+  applyGammaDecoding: 0
+  swizzle: 50462976
+  cookieLightType: 0
+  platformSettings:
+  - serializedVersion: 4
+    buildTarget: DefaultTexturePlatform
+    maxTextureSize: 2048
+    resizeAlgorithm: 0
+    textureFormat: -1
+    textureCompression: 0
+    compressionQuality: 50
+    crunchedCompression: 0
+    allowsAlphaSplitting: 0
+    overridden: 0
+    ignorePlatformSupport: 0
+    androidETC2FallbackOverride: 0
+    forceMaximumCompressionQuality_BC6H_BC7: 0
+  - serializedVersion: 4
+    buildTarget: Standalone
+    maxTextureSize: 2048
+    resizeAlgorithm: 0
+    textureFormat: -1
+    textureCompression: 1
+    compressionQuality: 50
+    crunchedCompression: 0
+    allowsAlphaSplitting: 0
+    overridden: 0
+    ignorePlatformSupport: 0
+    androidETC2FallbackOverride: 0
+    forceMaximumCompressionQuality_BC6H_BC7: 0
+  spriteSheet:
+    serializedVersion: 2
+    sprites:
+    - serializedVersion: 2
+      name: RoomPrefabSheet-Sheet-Base_0
+      rect:
+        serializedVersion: 2
+        x: 0
+        y: 864
+        width: 432
+        height: 288
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 461ed487b842957d0800000000000000
+      internalID: -2929269901190373020
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: RoomPrefabSheet-Sheet-Base_1
+      rect:
+        serializedVersion: 2
+        x: 432
+        y: 864
+        width: 432
+        height: 288
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: ff8c59935fc049e90800000000000000
+      internalID: -7019971671791122177
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: RoomPrefabSheet-Sheet-Base_2
+      rect:
+        serializedVersion: 2
+        x: 864
+        y: 864
+        width: 432
+        height: 288
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 07dfca4e181efba60800000000000000
+      internalID: 7692114636575669616
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: RoomPrefabSheet-Sheet-Base_3
+      rect:
+        serializedVersion: 2
+        x: 1296
+        y: 864
+        width: 432
+        height: 288
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: a99b33dc4eaf93070800000000000000
+      internalID: 8086770466522642842
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: RoomPrefabSheet-Sheet-Base_4
+      rect:
+        serializedVersion: 2
+        x: 0
+        y: 576
+        width: 432
+        height: 288
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: f062c4ce187cfa220800000000000000
+      internalID: 2499435679043036687
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: RoomPrefabSheet-Sheet-Base_5
+      rect:
+        serializedVersion: 2
+        x: 432
+        y: 576
+        width: 432
+        height: 288
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 0253ae520b2fa2830800000000000000
+      internalID: 4047314053510083872
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: RoomPrefabSheet-Sheet-Base_6
+      rect:
+        serializedVersion: 2
+        x: 864
+        y: 576
+        width: 432
+        height: 288
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 58a2f5056c0bc4170800000000000000
+      internalID: 8164094590314293893
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: RoomPrefabSheet-Sheet-Base_7
+      rect:
+        serializedVersion: 2
+        x: 1296
+        y: 576
+        width: 432
+        height: 288
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 10454a641745b7b80800000000000000
+      internalID: -8396024234808945663
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: RoomPrefabSheet-Sheet-Base_8
+      rect:
+        serializedVersion: 2
+        x: 0
+        y: 288
+        width: 432
+        height: 288
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: ffe492e119ee41c70800000000000000
+      internalID: 8941033467280969471
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: RoomPrefabSheet-Sheet-Base_9
+      rect:
+        serializedVersion: 2
+        x: 432
+        y: 288
+        width: 432
+        height: 288
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 83781355c33ef9fa0800000000000000
+      internalID: -5791660747508316360
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: RoomPrefabSheet-Sheet-Base_10
+      rect:
+        serializedVersion: 2
+        x: 864
+        y: 288
+        width: 432
+        height: 288
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: c620e4beb8216b910800000000000000
+      internalID: 1852688688867050092
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: RoomPrefabSheet-Sheet-Base_11
+      rect:
+        serializedVersion: 2
+        x: 1296
+        y: 288
+        width: 432
+        height: 288
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 63ee66df706279c20800000000000000
+      internalID: 3213078674910146102
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: RoomPrefabSheet-Sheet-Base_12
+      rect:
+        serializedVersion: 2
+        x: 0
+        y: 0
+        width: 432
+        height: 288
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: cbe34e3291f949120800000000000000
+      internalID: 2419733830129958588
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: RoomPrefabSheet-Sheet-Base_13
+      rect:
+        serializedVersion: 2
+        x: 432
+        y: 0
+        width: 432
+        height: 288
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 4b9d2fffc47c543a0800000000000000
+      internalID: -6681715338608715340
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    outline: []
+    customData: 
+    physicsShape: []
+    bones: []
+    spriteID: 3975a6fb3bc57d24d92fd090240df536
+    internalID: 0
+    vertices: []
+    indices: 
+    edges: []
+    weights: []
+    secondaryTextures: []
+    spriteCustomMetadata:
+      entries: []
+    nameFileIdTable:
+      RoomPrefabSheet-Sheet-Base_0: -2929269901190373020
+      RoomPrefabSheet-Sheet-Base_1: -7019971671791122177
+      RoomPrefabSheet-Sheet-Base_10: 1852688688867050092
+      RoomPrefabSheet-Sheet-Base_11: 3213078674910146102
+      RoomPrefabSheet-Sheet-Base_12: 2419733830129958588
+      RoomPrefabSheet-Sheet-Base_13: -6681715338608715340
+      RoomPrefabSheet-Sheet-Base_2: 7692114636575669616
+      RoomPrefabSheet-Sheet-Base_3: 8086770466522642842
+      RoomPrefabSheet-Sheet-Base_4: 2499435679043036687
+      RoomPrefabSheet-Sheet-Base_5: 4047314053510083872
+      RoomPrefabSheet-Sheet-Base_6: 8164094590314293893
+      RoomPrefabSheet-Sheet-Base_7: -8396024234808945663
+      RoomPrefabSheet-Sheet-Base_8: 8941033467280969471
+      RoomPrefabSheet-Sheet-Base_9: -5791660747508316360
+  mipmapLimitGroupName: 
+  pSDRemoveMatte: 0
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 

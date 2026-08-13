@@ -1,0 +1,81 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 5b2e821d6f07e6b4885a056af14025e5, type: 3}
+  m_Name: DoorDefinition
+  m_EditorClassIdentifier: 
+  _id: Door
+  _kind: 2
+  _moveableKind: 0
+  _npcMovementMode: 0
+  _displayName: Door
+  _description: "\uBB38\uC774\uB2E4"
+  _gmInstructions: 
+  _portrait: {fileID: 10907, guid: 0000000000000000f000000000000000, type: 0}
+  _legacyMoveMeters: 0
+  _legacyMoveMetersPerTurn: 0
+  _movementScore: 40
+  _statRuleTemplate: {fileID: 0}
+  _baseStats:
+  - _statId: coc.str
+    _value: 50
+  - _statId: coc.con
+    _value: 50
+  - _statId: coc.siz
+    _value: 50
+  - _statId: coc.dex
+    _value: 50
+  - _statId: coc.app
+    _value: 50
+  - _statId: coc.int
+    _value: 50
+  - _statId: coc.pow
+    _value: 50
+  - _statId: coc.edu
+    _value: 50
+  - _statId: coc.luck
+    _value: 50
+  - _statId: coc.cthulhu_mythos
+    _value: 0
+  _movementStatToScoreMultiplier: 5
+  _skillCatalog: {fileID: 0}
+  _skills: []
+  _presentationMetersPerSecond: 6
+  _presentationDurationSeconds: 0.5
+  _presentationHopHeight: 0.2
+  _presentationRotationDegrees: 7
+  _selectedScale: 1.08
+  _visualMode: 0
+  _legacyUseModularSpriteMotion: 0
+  _visualModeMigrated: 1
+  _simpleVisual: {fileID: 0}
+  _defaultAppearance:
+    _height: 0
+    _broadShoulders: 0
+    _headId: 0
+    _hairFrontId: 0
+    _hairBackId: 0
+    _hatId: 255
+    _topId: 255
+    _bottomId: 255
+    _shoesId: 255
+    _eyesId: 0
+    _legsId: 0
+    _portraitId: 0
+    _skinColor:
+      serializedVersion: 2
+      rgba: 4287934176
+    _hairColor:
+      serializedVersion: 2
+      rgba: 4281154158
+    _eyeColor:
+      serializedVersion: 2
+      rgba: 4284110893
