@@ -631,8 +631,13 @@ namespace Trpg.Pawns
         private bool _confineCameraToActivePawnRoom = true;
 
         [SerializeField, Tooltip(
-            "Door 이동 완료 직후 활성 Pawn 위치로 Board Camera를 즉시 이동합니다.")]
+            "Door 이동 완료 직후 Door Transfer의 실제 Destination으로 Board Camera를 즉시 이동합니다.")]
         private bool _snapCameraToActivePawnAfterDoor = true;
+
+        [SerializeField, Range(1, 5), Tooltip(
+            "Door 이동 직후 다른 Camera Follow/Presentation 갱신보다 확실히 우선하도록 " +
+            "몇 프레임 동안 새 Door Destination에 Camera를 유지할지 지정합니다.")]
+        private int _doorCameraSnapHoldFrames = 2;
 
         [SerializeField, Min(0f), Tooltip(
             "Camera가 Room 경계에 완전히 붙지 않도록 추가로 안쪽에 두는 여백(m).")]
@@ -659,6 +664,10 @@ namespace Trpg.Pawns
         private Material _runtimeFogMaterial;
         private float _nextVisibilityRefresh;
         private PawnMovementManager _boundMovementManager;
+
+        private InteractivePawn _doorCameraPawn;
+        private Vector2 _doorCameraDestination;
+        private int _doorCameraHoldFramesRemaining;
 
         public IReadOnlyList<RoomPlacement> RoomPrefabs => _roomPrefabs;
         public IReadOnlyList<BakedFogRoom> BakedFogRooms => _bakedFogRooms;
@@ -690,6 +699,11 @@ namespace Trpg.Pawns
                 Mathf.Max(1, _packedColumns);
             _packedRows =
                 Mathf.Max(0, _packedRows);
+            _doorCameraSnapHoldFrames =
+                Mathf.Clamp(
+                    _doorCameraSnapHoldFrames,
+                    1,
+                    5);
 
             if (_roomPrefabs == null)
                 _roomPrefabs = new List<RoomPlacement>();
@@ -730,6 +744,8 @@ namespace Trpg.Pawns
 
         private void OnDisable()
         {
+            _doorCameraPawn = null;
+            _doorCameraHoldFramesRemaining = 0;
             UnbindMovementCameraEvents();
         }
 
@@ -750,6 +766,9 @@ namespace Trpg.Pawns
 
         private void LateUpdate()
         {
+            if (ApplyPendingDoorCameraSnap())
+                return;
+
             ApplyActivePawnRoomCameraLimit();
         }
 
@@ -796,16 +815,66 @@ namespace Trpg.Pawns
         {
             if (!_snapCameraToActivePawnAfterDoor ||
                 pawn == null ||
-                _pawnManager == null ||
-                _pawnManager.SelectedInteractive != pawn)
+                _pawnManager == null)
             {
                 return;
             }
 
-            SnapBoardCameraTo(
-                pawn.PresentationWorldPosition);
+            // Door Icon은 활성 Pawn 기준으로만 열리므로
+            // DoorTransferred로 넘어온 pawn 자체를 이번 전송의 활성 Pawn으로 취급합니다.
+            // 선택 상태가 같은 프레임 잠깐 변해도 Camera Snap을 놓치지 않습니다.
+            _doorCameraPawn = pawn;
+            _doorCameraDestination = destination;
+            _doorCameraHoldFramesRemaining =
+                Mathf.Max(
+                    1,
+                    _doorCameraSnapHoldFrames);
 
-            ApplyActivePawnRoomCameraLimit();
+            SnapBoardCameraTo(
+                destination);
+
+            // 새 목적지 좌표로 Room을 판정해서 즉시 새 Room Bounds를 적용합니다.
+            ApplyCameraLimitForPawnAt(
+                pawn,
+                destination);
+        }
+
+        private bool ApplyPendingDoorCameraSnap()
+        {
+            if (_doorCameraHoldFramesRemaining <= 0 ||
+                _doorCameraPawn == null ||
+                !_snapCameraToActivePawnAfterDoor)
+            {
+                _doorCameraHoldFramesRemaining = 0;
+                _doorCameraPawn = null;
+                return false;
+            }
+
+            // 다른 Script가 같은 프레임 Camera를 이전 위치로 되돌리더라도
+            // LateUpdate에서 Door 목적지를 다시 최종 위치로 적용합니다.
+            SnapBoardCameraTo(
+                _doorCameraDestination);
+
+            ApplyCameraLimitForPawnAt(
+                _doorCameraPawn,
+                _doorCameraDestination);
+
+            _doorCameraHoldFramesRemaining--;
+
+            if (_doorCameraHoldFramesRemaining <= 0)
+                _doorCameraPawn = null;
+
+            return true;
+        }
+
+        private void SnapBoardCameraTo(
+            Vector2 pawnWorldPosition)
+        {
+            SnapBoardCameraTo(
+                new Vector3(
+                    pawnWorldPosition.x,
+                    pawnWorldPosition.y,
+                    0f));
         }
 
         private void SnapBoardCameraTo(
@@ -839,11 +908,32 @@ namespace Trpg.Pawns
 
             var activePawn =
                 _pawnManager.SelectedInteractive;
+
+            if (activePawn == null)
+                return;
+
+            // Camera/Room 판정은 Sprite Presentation 위치가 아니라
+            // 실제 Pawn WorldPosition을 사용해야 Door Teleport 직후에도 정확합니다.
+            ApplyCameraLimitForPawnAt(
+                activePawn,
+                activePawn.WorldPosition);
+        }
+
+        private void ApplyCameraLimitForPawnAt(
+            InteractivePawn pawn,
+            Vector2 worldPosition)
+        {
+            if (!_confineCameraToActivePawnRoom ||
+                pawn == null ||
+                _pawnManager == null)
+            {
+                return;
+            }
+
             var boardCamera =
                 _pawnManager.BoardCamera;
 
-            if (activePawn == null ||
-                boardCamera == null ||
+            if (boardCamera == null ||
                 !boardCamera.orthographic)
             {
                 return;
@@ -851,7 +941,7 @@ namespace Trpg.Pawns
 
             var room =
                 FindRoomAt(
-                    activePawn.PresentationWorldPosition);
+                    worldPosition);
 
             if (room == null ||
                 !room.TryGetWorldBounds(

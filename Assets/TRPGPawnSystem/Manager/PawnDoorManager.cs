@@ -56,6 +56,45 @@ namespace Trpg.Pawns
         [SerializeField, Min(120f)]
         private float _promptHeight = 180f;
 
+        [Header("Door Landing")]
+        [SerializeField, Min(0.02f), Tooltip(
+            "Destination Door Collider 바로 바깥에서 확보할 최소 간격(m). " +
+            "Door에서 멀리 떨어뜨리는 값이 아니라 Trigger 밖으로만 빼기 위한 값입니다.")]
+        private float _doorLandingClearanceMeters = 0.10f;
+
+        [SerializeField, Min(0.1f), Tooltip(
+            "Door 가장자리에서 바깥쪽으로 Walkable NavMesh를 찾을 최대 거리(m). " +
+            "기본값은 가까운 출입구만 찾도록 1.5m로 제한합니다.")]
+        private float _doorLandingSearchMaxMeters = 1.5f;
+
+        [SerializeField, Min(0.02f), Tooltip(
+            "Door 가장자리에서 바깥쪽으로 전진하며 검사하는 간격(m). " +
+            "작을수록 Door 바로 앞의 NavMesh를 더 정확히 찾습니다.")]
+        private float _doorLandingSearchStepMeters = 0.10f;
+
+        [SerializeField, Range(3, 9), Tooltip(
+            "BoxCollider2D 각 변에서 검사할 지점 수. " +
+            "중앙뿐 아니라 넓은 Door의 좌우 끝부분도 함께 검사합니다.")]
+        private int _doorLandingEdgeSamples = 5;
+
+        [SerializeField, Min(0.02f), Tooltip(
+            "각 Door 가장자리 Probe에서 NavMesh로 스냅할 작은 반경(m). " +
+            "멀리 있는 NavMesh를 끌어오지 않도록 작게 유지합니다.")]
+        private float _doorLandingSampleRadiusMeters = 0.12f;
+
+        [SerializeField, Min(0f), Tooltip(
+            "다른 이동 Pawn의 Collider와 이 거리보다 가까운 후보는 착지점에서 제외합니다.")]
+        private float _doorLandingPawnClearanceMeters = 0.20f;
+
+        [SerializeField, Min(0f), Tooltip(
+            "Obstacle FieldPawn과 이 거리보다 가까운 후보는 제외합니다. " +
+            "NavMesh 경계 바로 옆에서 Pawn Collider가 벽에 겹치는 문제를 줄입니다.")]
+        private float _doorLandingObstacleClearanceMeters = 0.08f;
+
+        [SerializeField, Tooltip(
+            "가까운 Walkable 지점을 찾지 못했을 때 NavMesh를 한 번 Rebuild하고 다시 탐색합니다.")]
+        private bool _rebuildNavMeshOnLandingFailure = true;
+
         private PawnSystemSettings _settings;
         private PawnNavMeshManager _navMeshManager;
         private PawnManager _pawnManager;
@@ -228,7 +267,7 @@ namespace Trpg.Pawns
             InteractivePawn bestDestination = null;
             var bestDistance = float.PositiveInfinity;
             var pawnPosition =
-                (Vector2)activePawn.PresentationWorldPosition;
+                activePawn.WorldPosition;
 
             for (var index = 0;
                  index < _interactivePawns.Count;
@@ -345,7 +384,7 @@ namespace Trpg.Pawns
             }
 
             var pawnPosition =
-                (Vector2)_iconMoveable.PresentationWorldPosition;
+                _iconMoveable.WorldPosition;
 
             if (GetDistanceToDoor(
                     _iconDoor,
@@ -838,22 +877,41 @@ namespace Trpg.Pawns
                 return;
             }
 
-            if (!_navMeshManager.TryProject(
-                    destinationDoor.ArrivalPosition,
-                    _settings.MaxProjectionMeters,
+            if (!TryResolveSafeDoorLanding(
+                    destinationDoor,
+                    moveable,
                     out var destination))
             {
-                Debug.LogWarning(
-                    $"[{destinationDoor.name}] Arrival Point 주변에 NavMesh가 없습니다.",
-                    destinationDoor);
+                if (_rebuildNavMeshOnLandingFailure)
+                {
+                    Debug.LogWarning(
+                        $"[{destinationDoor.name}] Door 주변 Walkable NavMesh를 찾지 못해 " +
+                        "NavMesh를 1회 Rebuild한 뒤 다시 탐색합니다.",
+                        destinationDoor);
 
-                _doorGuards.Remove(
-                    moveable);
+                    _navMeshManager.Rebuild();
+                }
 
-                ClearPendingDoorRequest(
-                    false);
+                if (!TryResolveSafeDoorLanding(
+                        destinationDoor,
+                        moveable,
+                        out destination))
+                {
+                    Debug.LogError(
+                        $"[{destinationDoor.name}] Door 주변 " +
+                        $"{Mathf.Max(0.1f, _doorLandingSearchMaxMeters):0.##}m 안에 " +
+                        "안전한 Walkable NavMesh 착지점을 찾지 못했습니다. " +
+                        "Door를 Walkable 영역 가까이에 배치했는지 확인하십시오.",
+                        destinationDoor);
 
-                return;
+                    _doorGuards.Remove(
+                        moveable);
+
+                    ClearPendingDoorRequest(
+                        false);
+
+                    return;
+                }
             }
 
             TransferResolved?.Invoke(
@@ -872,6 +930,726 @@ namespace Trpg.Pawns
                 ReleaseDoorGuard(
                     moveable,
                     guardSeconds));
+        }
+
+        private bool TryResolveSafeDoorLanding(
+            InteractivePawn destinationDoor,
+            InteractivePawn moveable,
+            out Vector2 destination)
+        {
+            destination = default;
+
+            if (destinationDoor == null ||
+                _navMeshManager == null)
+            {
+                return false;
+            }
+
+            Physics2D.SyncTransforms();
+
+            var clearance =
+                Mathf.Max(
+                    0.02f,
+                    _doorLandingClearanceMeters);
+
+            var sampleRadius =
+                Mathf.Max(
+                    0.02f,
+                    _doorLandingSampleRadiusMeters);
+
+            var maximumSearch =
+                Mathf.Max(
+                    clearance,
+                    _doorLandingSearchMaxMeters);
+
+            var step =
+                Mathf.Max(
+                    0.02f,
+                    _doorLandingSearchStepMeters);
+
+            // ArrivalPoint가 이미 Door Trigger 바깥의 아주 가까운 Walkable이라면
+            // 사용자가 의도적으로 만든 지점일 수 있으므로 우선 허용합니다.
+            // 단, Door에서 Search Max보다 멀면 사용하지 않습니다.
+            var arrival =
+                destinationDoor.ArrivalPosition;
+
+            if (GetDistanceToDoor(
+                    destinationDoor,
+                    arrival) <= maximumSearch &&
+                TryAcceptLandingCandidate(
+                    arrival,
+                    destinationDoor,
+                    moveable,
+                    sampleRadius,
+                    clearance,
+                    out destination))
+            {
+                return true;
+            }
+
+            var primaryCollider =
+                GetPrimaryDoorCollider(
+                    destinationDoor);
+
+            if (primaryCollider is BoxCollider2D box)
+            {
+                // 핵심:
+                // Door 중심에서 큰 Ring을 만드는 대신,
+                // 실제 BoxCollider의 네 변 "바로 바깥"부터 0.1m씩 전진합니다.
+                // 첫 번째로 Walkable 후보가 발견되는 거리층에서 끝내므로
+                // Door 바로 앞 NavMesh가 있으면 그 지점이 항상 우선됩니다.
+                return TryResolveNearestBoxEdgeLanding(
+                    box,
+                    destinationDoor,
+                    moveable,
+                    clearance,
+                    step,
+                    maximumSearch,
+                    sampleRadius,
+                    out destination);
+            }
+
+            // 비-Box Collider가 들어오더라도 먼 Ring 대신
+            // Collider ClosestPoint 기반의 짧은 방향 Probe만 사용합니다.
+            return TryResolveNearestGenericLanding(
+                destinationDoor,
+                moveable,
+                clearance,
+                step,
+                maximumSearch,
+                sampleRadius,
+                out destination);
+        }
+
+        private bool TryResolveNearestBoxEdgeLanding(
+            BoxCollider2D box,
+            InteractivePawn destinationDoor,
+            InteractivePawn moveable,
+            float clearance,
+            float step,
+            float maximumSearch,
+            float sampleRadius,
+            out Vector2 destination)
+        {
+            destination = default;
+
+            if (box == null)
+                return false;
+
+            var boxTransform =
+                box.transform;
+
+            var center =
+                (Vector2)boxTransform.TransformPoint(
+                    box.offset);
+
+            var scale =
+                boxTransform.lossyScale;
+
+            var halfWidth =
+                Mathf.Abs(
+                    box.size.x *
+                    scale.x) *
+                0.5f;
+
+            var halfHeight =
+                Mathf.Abs(
+                    box.size.y *
+                    scale.y) *
+                0.5f;
+
+            var right =
+                (Vector2)boxTransform.right;
+
+            var up =
+                (Vector2)boxTransform.up;
+
+            if (right.sqrMagnitude <= 0.0001f)
+                right = Vector2.right;
+            else
+                right.Normalize();
+
+            if (up.sqrMagnitude <= 0.0001f)
+                up = Vector2.up;
+            else
+                up.Normalize();
+
+            var sampleCount =
+                Mathf.Clamp(
+                    _doorLandingEdgeSamples,
+                    3,
+                    9);
+
+            // 홀수 개를 유지해 각 변 중앙이 반드시 후보가 되게 합니다.
+            if ((sampleCount & 1) == 0)
+                sampleCount++;
+
+            for (var outside = clearance;
+                 outside <= maximumSearch + 0.0001f;
+                 outside += step)
+            {
+                var found =
+                    false;
+
+                var best =
+                    Vector2.zero;
+
+                var bestScore =
+                    float.PositiveInfinity;
+
+                // 0: Door의 +Up 방향(기본 Front)
+                // 1: -Up
+                // 2: +Right
+                // 3: -Right
+                //
+                // 같은 거리층에서 둘 다 Walkable이면 +Up을 약간 우선하되,
+                // 실제 거리 차이가 있으면 더 가까운 후보가 이깁니다.
+                EvaluateBoxEdge(
+                    center,
+                    up,
+                    right,
+                    halfHeight,
+                    halfWidth,
+                    outside,
+                    0,
+                    sampleCount,
+                    destinationDoor,
+                    moveable,
+                    sampleRadius,
+                    clearance,
+                    ref found,
+                    ref best,
+                    ref bestScore);
+
+                EvaluateBoxEdge(
+                    center,
+                    -up,
+                    right,
+                    halfHeight,
+                    halfWidth,
+                    outside,
+                    1,
+                    sampleCount,
+                    destinationDoor,
+                    moveable,
+                    sampleRadius,
+                    clearance,
+                    ref found,
+                    ref best,
+                    ref bestScore);
+
+                EvaluateBoxEdge(
+                    center,
+                    right,
+                    up,
+                    halfWidth,
+                    halfHeight,
+                    outside,
+                    2,
+                    sampleCount,
+                    destinationDoor,
+                    moveable,
+                    sampleRadius,
+                    clearance,
+                    ref found,
+                    ref best,
+                    ref bestScore);
+
+                EvaluateBoxEdge(
+                    center,
+                    -right,
+                    up,
+                    halfWidth,
+                    halfHeight,
+                    outside,
+                    3,
+                    sampleCount,
+                    destinationDoor,
+                    moveable,
+                    sampleRadius,
+                    clearance,
+                    ref found,
+                    ref best,
+                    ref bestScore);
+
+                // 가장 가까운 거리층에서 하나라도 발견되면 즉시 종료합니다.
+                // 더 먼 1m/1.5m 후보는 아예 보지 않습니다.
+                if (found)
+                {
+                    destination = best;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private void EvaluateBoxEdge(
+            Vector2 center,
+            Vector2 outward,
+            Vector2 tangent,
+            float halfNormalExtent,
+            float halfTangentExtent,
+            float outside,
+            int sidePriority,
+            int sampleCount,
+            InteractivePawn destinationDoor,
+            InteractivePawn moveable,
+            float sampleRadius,
+            float clearance,
+            ref bool found,
+            ref Vector2 best,
+            ref float bestScore)
+        {
+            var edgeCenter =
+                center +
+                outward *
+                (
+                    halfNormalExtent +
+                    outside
+                );
+
+            for (var sampleIndex = 0;
+                 sampleIndex < sampleCount;
+                 sampleIndex++)
+            {
+                var normalized =
+                    sampleCount <= 1
+                        ? 0f
+                        : Mathf.Lerp(
+                            -1f,
+                            1f,
+                            sampleIndex /
+                            (float)(sampleCount - 1));
+
+                var query =
+                    edgeCenter +
+                    tangent *
+                    (
+                        halfTangentExtent *
+                        normalized
+                    );
+
+                if (!TryAcceptLandingCandidate(
+                        query,
+                        destinationDoor,
+                        moveable,
+                        sampleRadius,
+                        clearance,
+                        out var candidate))
+                {
+                    continue;
+                }
+
+                // 첫 기준은 실제 Door Collider에서의 거리.
+                // 그 다음은 Query와 Projection 결과의 오차.
+                // 같은 조건이면 +Up(Front) -> -Up -> Right -> Left 순으로 아주 약하게 우선.
+                var doorDistance =
+                    GetDistanceToDoor(
+                        destinationDoor,
+                        candidate);
+
+                var projectionError =
+                    Vector2.Distance(
+                        query,
+                        candidate);
+
+                var centerBias =
+                    Mathf.Abs(normalized) *
+                    0.001f;
+
+                var sideBias =
+                    sidePriority *
+                    0.0001f;
+
+                var score =
+                    doorDistance +
+                    projectionError * 0.10f +
+                    centerBias +
+                    sideBias;
+
+                if (found &&
+                    score >= bestScore)
+                {
+                    continue;
+                }
+
+                found = true;
+                bestScore = score;
+                best = candidate;
+            }
+        }
+
+        private bool TryResolveNearestGenericLanding(
+            InteractivePawn destinationDoor,
+            InteractivePawn moveable,
+            float clearance,
+            float step,
+            float maximumSearch,
+            float sampleRadius,
+            out Vector2 destination)
+        {
+            destination = default;
+
+            var center =
+                (Vector2)GetDoorWorldCenter(
+                    destinationDoor);
+
+            var up =
+                (Vector2)destinationDoor.transform.up;
+
+            var right =
+                (Vector2)destinationDoor.transform.right;
+
+            if (up.sqrMagnitude <= 0.0001f)
+                up = Vector2.up;
+            else
+                up.Normalize();
+
+            if (right.sqrMagnitude <= 0.0001f)
+                right = Vector2.right;
+            else
+                right.Normalize();
+
+            var directions =
+                new[]
+                {
+                    up,
+                    -up,
+                    right,
+                    -right
+                };
+
+            for (var distance = clearance;
+                 distance <= maximumSearch + 0.0001f;
+                 distance += step)
+            {
+                var found =
+                    false;
+
+                var best =
+                    Vector2.zero;
+
+                var bestScore =
+                    float.PositiveInfinity;
+
+                for (var index = 0;
+                     index < directions.Length;
+                     index++)
+                {
+                    var raw =
+                        center +
+                        directions[index] *
+                        distance;
+
+                    var closest =
+                        GetClosestPointOnDoor(
+                            destinationDoor,
+                            raw);
+
+                    var outward =
+                        raw - closest;
+
+                    if (outward.sqrMagnitude <= 0.0001f)
+                        outward = directions[index];
+                    else
+                        outward.Normalize();
+
+                    var query =
+                        closest +
+                        outward *
+                        distance;
+
+                    if (!TryAcceptLandingCandidate(
+                            query,
+                            destinationDoor,
+                            moveable,
+                            sampleRadius,
+                            clearance,
+                            out var candidate))
+                    {
+                        continue;
+                    }
+
+                    var score =
+                        GetDistanceToDoor(
+                            destinationDoor,
+                            candidate) +
+                        Vector2.Distance(
+                            query,
+                            candidate) *
+                        0.10f +
+                        index *
+                        0.0001f;
+
+                    if (found &&
+                        score >= bestScore)
+                    {
+                        continue;
+                    }
+
+                    found = true;
+                    bestScore = score;
+                    best = candidate;
+                }
+
+                if (found)
+                {
+                    destination = best;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static Collider2D GetPrimaryDoorCollider(
+            InteractivePawn door)
+        {
+            if (door == null)
+                return null;
+
+            var colliders =
+                door.GetComponentsInChildren<Collider2D>(
+                    true);
+
+            Collider2D fallback = null;
+
+            for (var index = 0;
+                 index < colliders.Length;
+                 index++)
+            {
+                var collider =
+                    colliders[index];
+
+                if (collider == null ||
+                    !collider.enabled ||
+                    !collider.gameObject.activeInHierarchy)
+                {
+                    continue;
+                }
+
+                if (fallback == null)
+                    fallback = collider;
+
+                if (collider.isTrigger)
+                    return collider;
+            }
+
+            return fallback;
+        }
+
+        private static Vector2 GetClosestPointOnDoor(
+            InteractivePawn door,
+            Vector2 worldPosition)
+        {
+            if (door == null)
+                return worldPosition;
+
+            var colliders =
+                door.GetComponentsInChildren<Collider2D>(
+                    true);
+
+            var found =
+                false;
+
+            var best =
+                worldPosition;
+
+            var bestDistance =
+                float.PositiveInfinity;
+
+            for (var index = 0;
+                 index < colliders.Length;
+                 index++)
+            {
+                var collider =
+                    colliders[index];
+
+                if (collider == null ||
+                    !collider.enabled ||
+                    !collider.gameObject.activeInHierarchy)
+                {
+                    continue;
+                }
+
+                var closest =
+                    collider.ClosestPoint(
+                        worldPosition);
+
+                var distance =
+                    Vector2.SqrMagnitude(
+                        worldPosition -
+                        closest);
+
+                if (found &&
+                    distance >= bestDistance)
+                {
+                    continue;
+                }
+
+                found = true;
+                bestDistance = distance;
+                best = closest;
+            }
+
+            return found
+                ? best
+                : (Vector2)door.transform.position;
+        }
+
+        private bool TryAcceptLandingCandidate(
+            Vector2 query,
+            InteractivePawn destinationDoor,
+            InteractivePawn moveable,
+            float sampleRadius,
+            float doorClearance,
+            out Vector2 projected)
+        {
+            projected = default;
+
+            if (!_navMeshManager.TryProject(
+                    query,
+                    sampleRadius,
+                    out var candidate))
+            {
+                return false;
+            }
+
+            // Door Trigger 안 또는 바로 붙은 위치는
+            // Teleport 직후 다시 Door 상호작용이 잡힐 수 있으므로 제외합니다.
+            if (GetDistanceToDoor(
+                    destinationDoor,
+                    candidate) <
+                doorClearance)
+            {
+                return false;
+            }
+
+            // 다른 이동 Pawn 위로 겹쳐서 Teleport되는 후보도 제외합니다.
+            if (IsLandingBlockedByPawn(
+                    candidate,
+                    moveable,
+                    destinationDoor))
+            {
+                return false;
+            }
+
+            // NavMesh 경계는 점 기준으로는 유효해도 Pawn Collider가 Wall에 살짝
+            // 겹칠 수 있으므로 Obstacle FieldPawn과의 최소 여백도 검사합니다.
+            if (IsLandingTooCloseToObstacle(
+                    candidate))
+            {
+                return false;
+            }
+
+            projected = candidate;
+            return true;
+        }
+
+        private bool IsLandingTooCloseToObstacle(
+            Vector2 position)
+        {
+            var radius =
+                Mathf.Max(
+                    0f,
+                    _doorLandingObstacleClearanceMeters);
+
+            if (radius <= 0f)
+                return false;
+
+            var overlaps =
+                Physics2D.OverlapCircleAll(
+                    position,
+                    radius);
+
+            for (var index = 0;
+                 index < overlaps.Length;
+                 index++)
+            {
+                var collider =
+                    overlaps[index];
+
+                if (collider == null ||
+                    !collider.enabled ||
+                    collider.isTrigger ||
+                    !collider.gameObject.activeInHierarchy)
+                {
+                    continue;
+                }
+
+                var fieldPawn =
+                    collider.GetComponentInParent<FieldPawn>();
+
+                if (fieldPawn != null &&
+                    fieldPawn.IsObstacle)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool IsLandingBlockedByPawn(
+            Vector2 position,
+            InteractivePawn moveable,
+            InteractivePawn destinationDoor)
+        {
+            var clearance =
+                Mathf.Max(
+                    0f,
+                    _doorLandingPawnClearanceMeters);
+
+            for (var pawnIndex = 0;
+                 pawnIndex < _interactivePawns.Count;
+                 pawnIndex++)
+            {
+                var pawn =
+                    _interactivePawns[pawnIndex];
+
+                if (pawn == null ||
+                    pawn == moveable ||
+                    pawn == destinationDoor ||
+                    pawn.IsDoor ||
+                    !pawn.gameObject.activeInHierarchy)
+                {
+                    continue;
+                }
+
+                var colliders =
+                    pawn.GetComponentsInChildren<Collider2D>(
+                        true);
+
+                for (var colliderIndex = 0;
+                     colliderIndex < colliders.Length;
+                     colliderIndex++)
+                {
+                    var collider =
+                        colliders[colliderIndex];
+
+                    if (collider == null ||
+                        !collider.enabled ||
+                        collider.isTrigger ||
+                        !collider.gameObject.activeInHierarchy)
+                    {
+                        continue;
+                    }
+
+                    var closest =
+                        collider.ClosestPoint(
+                            position);
+
+                    if (Vector2.Distance(
+                            position,
+                            closest) <= clearance)
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
         }
 
         private void CancelPendingDoor()
@@ -945,6 +1723,68 @@ namespace Trpg.Pawns
             }
 
             _doorGuards.Remove(pawn);
+        }
+
+        private void OnValidate()
+        {
+            _doorInteractionRangeMeters =
+                Mathf.Max(
+                    0.1f,
+                    _doorInteractionRangeMeters);
+
+            _doorIconSizePixels =
+                Mathf.Max(
+                    24f,
+                    _doorIconSizePixels);
+
+            _promptWidth =
+                Mathf.Max(
+                    240f,
+                    _promptWidth);
+
+            _promptHeight =
+                Mathf.Max(
+                    120f,
+                    _promptHeight);
+
+            _doorLandingClearanceMeters =
+                Mathf.Max(
+                    0.02f,
+                    _doorLandingClearanceMeters);
+
+            _doorLandingSearchMaxMeters =
+                Mathf.Max(
+                    0.1f,
+                    _doorLandingSearchMaxMeters);
+
+            _doorLandingSearchStepMeters =
+                Mathf.Max(
+                    0.02f,
+                    _doorLandingSearchStepMeters);
+
+            _doorLandingEdgeSamples =
+                Mathf.Clamp(
+                    _doorLandingEdgeSamples,
+                    3,
+                    9);
+
+            if ((_doorLandingEdgeSamples & 1) == 0)
+                _doorLandingEdgeSamples++;
+
+            _doorLandingSampleRadiusMeters =
+                Mathf.Max(
+                    0.02f,
+                    _doorLandingSampleRadiusMeters);
+
+            _doorLandingPawnClearanceMeters =
+                Mathf.Max(
+                    0f,
+                    _doorLandingPawnClearanceMeters);
+
+            _doorLandingObstacleClearanceMeters =
+                Mathf.Max(
+                    0f,
+                    _doorLandingObstacleClearanceMeters);
         }
 
         private void OnDestroy()
